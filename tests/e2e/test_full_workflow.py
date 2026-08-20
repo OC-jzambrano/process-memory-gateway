@@ -1,30 +1,8 @@
-import pytest
-from pathlib import Path
-import tempfile
-
-from src.api.memory_tools import ProcessMemoryTools
-from src.storage.repository import MemoryRepository
-from src.extractor.service import BedrockExtractorService
-from src.models.schemas import Client
 from src.models.enums import RuleStatus, RuleType
-
-@pytest.fixture
-def memory_tools():
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-        db_path = Path(f.name)
-    repo = MemoryRepository(db_path=db_path)
-    client = Client(client_id="benchmark_client", client_name="Benchmark Client Ltd.")
-    repo.upsert_client(client)
-    
-    extractor = BedrockExtractorService()
-    tools = ProcessMemoryTools(repo=repo, extractor=extractor)
-    yield tools
-    if db_path.exists():
-        db_path.unlink()
 
 def test_bedrock_extract_three_benchmark_rules(memory_tools):
     """
-    Tests the real Bedrock extraction pipeline on the benchmark dialogue:
+    Tests the real extraction pipeline on the benchmark dialogue:
     - Rule 1: Approval policy for Manufacturing installation.
     - Rule 2: Naming convention for BOMs (versioning).
     - Rule 3: Data validation (no duplicate SKU components).
@@ -36,7 +14,7 @@ def test_bedrock_extract_three_benchmark_rules(memory_tools):
 
     result = memory_tools.extract_memory_candidates(
         interaction_text=dialogue,
-        client_id="benchmark_client",
+        client_id="test_client",
         process_name="manufacturing_setup"
     )
 
@@ -54,9 +32,35 @@ def test_bedrock_extract_three_benchmark_rules(memory_tools):
         assert len(cand.source_quote) > 0
 
     # Verify pending candidates are in database inbox
-    pending_inbox = memory_tools.get_candidate_rules("benchmark_client")
+    pending_inbox = memory_tools.get_candidate_rules("test_client")
     assert len(pending_inbox) == len(result.candidates)
 
     # Verify active rules are 0 before review
-    active = memory_tools.get_active_rules("benchmark_client")
+    active = memory_tools.get_active_rules("test_client")
     assert len(active) == 0
+
+def test_complete_lifecycle(memory_tools):
+    """
+    Full lifecycle:
+    1. Extract candidates from dialogue
+    2. Approve first, reject second
+    3. Verify active rules = 1
+    4. Verify pending = 0
+    """
+    result = memory_tools.extract_memory_candidates(
+        "Manufacturing requires approval from the lead. BOMs must include version numbers.",
+        "test_client", "mrp"
+    )
+    assert len(result.candidates) >= 2
+
+    # Approve first candidate
+    memory_tools.review_candidate_rule(result.candidates[0].candidate_id, "approve", "reviewer")
+    # Reject second
+    memory_tools.review_candidate_rule(result.candidates[1].candidate_id, "reject", "reviewer")
+
+    active = memory_tools.get_active_rules("test_client")
+    assert len(active) == 1
+
+    # No pending candidates remain (all reviewed)
+    pending = memory_tools.get_candidate_rules("test_client")
+    assert len(pending) == 0

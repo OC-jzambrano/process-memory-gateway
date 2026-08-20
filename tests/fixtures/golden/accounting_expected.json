@@ -1,0 +1,6 @@
+{
+  "rules": [
+    {"rule_type": "approval_policy"},
+    {"rule_type": "data_validation"}
+  ]
+}

@@ -1,0 +1,3 @@
+In this company, Manufacturing is only installed with approval from the Operations Lead.
+BOMs must include version numbers.
+Do not create duplicate components if the SKU already exists.

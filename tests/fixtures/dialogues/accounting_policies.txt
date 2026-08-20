@@ -1,0 +1,2 @@
+Vendor bills exceeding 5000 EUR require approval from Finance Director.
+Bank account numbers must be unique across all partners.
