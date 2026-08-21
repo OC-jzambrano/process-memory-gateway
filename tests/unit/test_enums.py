@@ -1,5 +1,14 @@
 import pytest
-from src.models.enums import RuleType, Severity, RuleStatus, EnforcementMode, DecisionType, SourceType
+from src.models.enums import (
+    RuleType,
+    Severity,
+    RuleStatus,
+    EnforcementMode,
+    DecisionType,
+    SourceType,
+    EventType,
+    ExtractionMode
+)
 
 def test_rule_type_has_six_members():
     assert len(RuleType) == 6
@@ -24,7 +33,13 @@ def test_rule_status_covers_full_lifecycle():
     assert statuses >= {"pending_review", "approved", "rejected", "superseded", "archived"}
 
 def test_decision_type_values():
-    assert set(d.value for d in DecisionType) == {"approve", "reject", "edit", "escalate"}
+    assert set(d.value for d in DecisionType) == {"approve", "reject", "edit", "supersede", "escalate"}
+
+def test_event_type_values():
+    assert set(e.value for e in EventType) == {"candidate_review", "rule_superseded", "rule_archived"}
+
+def test_extraction_mode_values():
+    assert set(m.value for m in ExtractionMode) == {"bedrock_llm", "local_fallback"}
 
 def test_enforcement_mode_values():
     assert set(e.value for e in EnforcementMode) == {"blocking", "requires_approval", "advisory"}

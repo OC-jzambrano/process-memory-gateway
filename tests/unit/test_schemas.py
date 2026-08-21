@@ -9,9 +9,10 @@ from src.models.schemas import (
     ReviewEvent,
     ExtractedRuleItem,
     ExtractedPayload,
-    ExtractionResult
+    ExtractionResult,
+    Principal
 )
-from src.models.enums import RuleStatus, Severity, RuleType, EnforcementMode, DecisionType, SourceType
+from src.models.enums import RuleStatus, Severity, RuleType, EnforcementMode, DecisionType, SourceType, EventType
 
 def test_confidence_above_max_rejected():
     with pytest.raises(ValidationError):
@@ -62,3 +63,17 @@ def test_canonical_rule_model():
     )
     assert rule.version == 1
     assert rule.status == RuleStatus.APPROVED
+
+def test_principal_model_and_validation():
+    p = Principal(client_id="tenant_01", user_id="agent_smith")
+    assert p.client_id == "tenant_01"
+    assert p.user_id == "agent_smith"
+    assert p.role == "reviewer"
+    assert "review" in p.permissions
+
+    # Blank client_id / user_id must be rejected
+    with pytest.raises(ValidationError):
+        Principal(client_id="", user_id="valid_user")
+
+    with pytest.raises(ValidationError):
+        Principal(client_id="valid_client", user_id="   ")

@@ -1,6 +1,7 @@
 import sys
 import pytest
 import tempfile
+import uuid
 from pathlib import Path
 
 # Ensure project root is on sys.path for absolute imports
@@ -10,7 +11,7 @@ from src.storage.repository import MemoryRepository
 from src.storage.db import init_db
 from src.extractor.service import BedrockExtractorService
 from src.api.memory_tools import ProcessMemoryTools
-from src.models.schemas import Client, ExtractionSession, CandidateRule
+from src.models.schemas import Client, ExtractionSession, CandidateRule, Principal
 from src.models.enums import (
     RuleStatus, RuleType, Severity, EnforcementMode, DecisionType
 )
@@ -29,7 +30,10 @@ def temp_db():
     init_db(db_path)
     yield db_path
     if db_path.exists():
-        db_path.unlink()
+        try:
+            db_path.unlink()
+        except Exception:
+            pass
 
 # --- FIXTURE: Repository with seeded client ---
 @pytest.fixture
@@ -48,42 +52,43 @@ def repo_two_clients(temp_db):
     r.upsert_client(Client(client_id="client_b", client_name="Company B"))
     return r
 
-# --- FIXTURE: ProcessMemoryTools with real fallback extractor ---
+# --- FIXTURE: ProcessMemoryTools with deterministic offline extractor ---
 @pytest.fixture
 def memory_tools(temp_db):
-    """Full tools stack with real extractor (falls back to local parser)."""
+    """Full tools stack with deterministic offline extractor for instant test runs."""
     r = MemoryRepository(db_path=temp_db)
     r.upsert_client(Client(client_id="test_client", client_name="Test Corp"))
-    extractor = BedrockExtractorService()
+    extractor = BedrockExtractorService(offline_mode=True)
     return ProcessMemoryTools(repo=r, extractor=extractor)
 
 # --- FIXTURE: Helper to create and save a candidate ---
 @pytest.fixture
 def make_candidate(repo):
-    """Factory fixture that creates and saves a candidate rule."""
+    """Factory fixture that creates and saves a candidate rule with valid session provenance."""
     def _make(
-        candidate_id="cand_01",
+        candidate_id=None,
         client_id="test_client",
         process_name="general",
-        rule_text="Test rule.",
+        rule_text="Test rule statement.",
         rule_type=RuleType.OPERATIONAL_CONSTRAINT,
         session_id=None
     ):
-        if session_id is None:
-            session_id = f"sess_{candidate_id}"
-            session = ExtractionSession(
-                session_id=session_id,
-                client_id=client_id,
-                process_name=process_name,
-                interaction_text="Test interaction text.",
-                model_id="test-model",
-                candidates_extracted=1
-            )
-            repo.create_session(session)
+        cid = candidate_id or f"cand_{uuid.uuid4().hex}"
+        sid = session_id or f"sess_{uuid.uuid4().hex}"
+
+        session = ExtractionSession(
+            session_id=sid,
+            client_id=client_id,
+            process_name=process_name,
+            interaction_text="Test interaction text.",
+            model_id="test-model",
+            candidates_extracted=1
+        )
+        repo.create_session(session)
 
         cand = CandidateRule(
-            candidate_id=candidate_id,
-            session_id=session_id,
+            candidate_id=cid,
+            session_id=sid,
             client_id=client_id,
             process_name=process_name,
             rule_text=rule_text,

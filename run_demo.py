@@ -1,4 +1,3 @@
-import json
 import sys
 from pathlib import Path
 
@@ -6,8 +5,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from src.api.memory_tools import ProcessMemoryTools
-from src.models.schemas import Client, BusinessProcess
-from src.models.enums import DecisionType, RuleStatus
+from src.models.schemas import Client, BusinessProcess, Principal
+from src.models.enums import DecisionType
 
 def main():
     print("=" * 70)
@@ -17,6 +16,7 @@ def main():
     tools = ProcessMemoryTools()
     client_id = "odooconcept_demo"
     process_name = "manufacturing_setup"
+    principal = Principal(client_id=client_id, user_id="juan_zambrano", role="lead_consultant")
 
     # 1. Seed Client & Process
     print("\n[Step 1] Registering Client & Process Context...")
@@ -39,16 +39,18 @@ def main():
         "In this company, Manufacturing is only installed with approval from the Operations Lead. "
         "BOMs must include version numbers. Do not create duplicate components if the SKU already exists."
     )
-    print("\n[Step 2] Processing User Interaction via Bedrock Claude 3.5 Haiku...")
+    print("\n[Step 2] Processing User Interaction via Bedrock Claude...")
     print(f'Input Dialogue:\n"{sample_dialogue}"\n')
 
     extraction_result = tools.extract_memory_candidates(
         interaction_text=sample_dialogue,
         client_id=client_id,
-        process_name=process_name
+        process_name=process_name,
+        principal=principal
     )
 
     print(f"Extraction Session Created: {extraction_result.session_id}")
+    print(f"Extraction Mode: {extraction_result.extraction_mode.value}")
     print(f"Candidates Inferred: {len(extraction_result.candidates)}")
 
     # 3. Display Candidates in Pending Review Inbox
@@ -66,18 +68,20 @@ def main():
 
     # 4. Verify Active Rules Isolation
     print("\n[Step 4] Checking Active Canonical Rules BEFORE Human Review...")
-    active_before = tools.get_active_rules(client_id, process_name)
+    active_before = tools.get_active_rules(client_id, process_name, principal=principal)
     print(f"Active Rules count: {len(active_before)} (Guaranteed 0 - pending rules cannot enforce!)")
 
     # 5. Human Review Workflow
-    print("\n[Step 5] Performing Human Review (Approve Candidate #1 & #2, Reject #3)...")
+    print("\n[Step 5] Performing Human Review (Approve Candidate #1 & #2)...")
     if extraction_result.candidates:
         c1 = extraction_result.candidates[0]
         promoted_1 = tools.review_candidate_rule(
             candidate_id=c1.candidate_id,
             decision=DecisionType.APPROVE,
-            reviewer="juan_zambrano",
-            notes="Standard company operations policy."
+            reviewer=principal.user_id,
+            client_id=client_id,
+            notes="Standard company operations policy.",
+            principal=principal
         )
         print(f"  -> Approved '{c1.candidate_id}': Created Canonical Rule '{promoted_1.rule_id}' (v{promoted_1.version})")
 
@@ -86,14 +90,16 @@ def main():
         promoted_2 = tools.review_candidate_rule(
             candidate_id=c2.candidate_id,
             decision=DecisionType.APPROVE,
-            reviewer="juan_zambrano",
-            notes="Required naming standard."
+            reviewer=principal.user_id,
+            client_id=client_id,
+            notes="Required naming standard.",
+            principal=principal
         )
         print(f"  -> Approved '{c2.candidate_id}': Created Canonical Rule '{promoted_2.rule_id}' (v{promoted_2.version})")
 
     # 6. Verify Active Canonical Rules
     print("\n[Step 6] Checking Active Canonical Rules AFTER Human Review...")
-    active_after = tools.get_active_rules(client_id, process_name)
+    active_after = tools.get_active_rules(client_id, process_name, principal=principal)
     print(f"Active Rules count: {len(active_after)}")
     for r in active_after:
         print(f"  * [v{r.version}] [{r.rule_type.value.upper()}] ({r.severity.value}): {r.rule_text}")

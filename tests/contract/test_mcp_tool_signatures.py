@@ -2,13 +2,14 @@ import inspect
 from src.api.memory_tools import ProcessMemoryTools
 
 def test_extract_tool_signature():
-    """Tool 1: extract_memory_candidates must accept these exact parameters."""
+    """Tool 1: extract_memory_candidates parameter names."""
     sig = inspect.signature(ProcessMemoryTools.extract_memory_candidates)
     params = list(sig.parameters.keys())
     assert "interaction_text" in params
     assert "client_id" in params
     assert "process_name" in params
     assert "source_type" in params
+    assert "principal" in params
 
 def test_get_candidates_tool_signature():
     """Tool 2: get_candidate_rules signature."""
@@ -17,15 +18,19 @@ def test_get_candidates_tool_signature():
     assert "client_id" in params
     assert "status" in params
     assert "process_name" in params
+    assert "principal" in params
 
 def test_review_tool_signature():
-    """Tool 3: review_candidate_rule must accept decision as string or enum."""
+    """Tool 3: review_candidate_rule signature."""
     sig = inspect.signature(ProcessMemoryTools.review_candidate_rule)
     params = list(sig.parameters.keys())
     assert "candidate_id" in params
     assert "decision" in params
     assert "reviewer" in params
+    assert "client_id" in params
     assert "edited_rule_text" in params
+    assert "notes" in params
+    assert "principal" in params
 
 def test_get_active_rules_tool_signature():
     """Tool 4: get_active_rules signature."""
@@ -33,6 +38,7 @@ def test_get_active_rules_tool_signature():
     params = list(sig.parameters.keys())
     assert "client_id" in params
     assert "process_name" in params
+    assert "principal" in params
 
 def test_all_four_tools_exist():
     """The 4 MCP tools must always exist on ProcessMemoryTools."""

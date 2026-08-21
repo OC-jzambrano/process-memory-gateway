@@ -29,7 +29,13 @@ class DecisionType(str, Enum):
     APPROVE = "approve"
     REJECT = "reject"
     EDIT = "edit"
+    SUPERSEDE = "supersede"
     ESCALATE = "escalate"
+
+class EventType(str, Enum):
+    CANDIDATE_REVIEW = "candidate_review"
+    RULE_SUPERSEDED = "rule_superseded"
+    RULE_ARCHIVED = "rule_archived"
 
 class SourceType(str, Enum):
     USER_INTERACTION = "user_interaction"
@@ -37,3 +43,7 @@ class SourceType(str, Enum):
     TICKET_COMMENT = "ticket_comment"
     SLACK_MESSAGE = "slack_message"
     DOCUMENT_UPLOAD = "document_upload"
+
+class ExtractionMode(str, Enum):
+    BEDROCK_LLM = "bedrock_llm"
+    LOCAL_FALLBACK = "local_fallback"
