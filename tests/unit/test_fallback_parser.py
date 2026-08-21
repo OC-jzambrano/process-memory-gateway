@@ -23,6 +23,18 @@ def test_detects_operational_constraint():
     result = _parse("Users must only execute migration during weekend maintenance windows.")
     assert any(r.rule_type == RuleType.OPERATIONAL_CONSTRAINT for r in result.rules)
 
+def test_detects_spanish_approval_policy():
+    result = _parse("Para instalar Fabricación se requiere la aprobación del líder de operaciones.")
+    assert any(r.rule_type == RuleType.APPROVAL_POLICY for r in result.rules)
+
+def test_detects_spanish_naming_convention():
+    result = _parse("Las listas de materiales deben incluir el número de versión.")
+    assert any(r.rule_type == RuleType.NAMING_CONVENTION for r in result.rules)
+
+def test_detects_spanish_data_validation():
+    result = _parse("No se deben crear registros duplicados si el SKU ya existe.")
+    assert any(r.rule_type == RuleType.DATA_VALIDATION for r in result.rules)
+
 def test_chitchat_returns_empty():
     result = _parse("Hi, how are you? The weather is nice today.")
     assert len(result.rules) == 0
