@@ -14,7 +14,7 @@ def inspect_database():
         return
 
     print("=" * 80)
-    print(f"PROCESS MEMORY GATEWAY - DATABASE INSPECTOR")
+    print("PROCESS MEMORY GATEWAY - DATABASE INSPECTOR")
     print(f"File Location: {db_path}")
     print("=" * 80)
 
