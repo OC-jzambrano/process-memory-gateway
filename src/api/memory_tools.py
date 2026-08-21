@@ -1,6 +1,7 @@
 from typing import List, Optional, Union
 
 from src.models.schemas import (
+    Client,
     CandidateRule,
     CanonicalRule,
     ExtractionResult,
@@ -61,6 +62,10 @@ class ProcessMemoryTools:
         """
         resolved = self._resolve_principal(client_id=client_id, principal=principal)
         effective_client_id = resolved.client_id
+
+        # Auto-register client if first interaction
+        if not self.repo.get_client(effective_client_id):
+            self.repo.upsert_client(Client(client_id=effective_client_id, client_name=effective_client_id))
 
         result = self.extractor.extract_from_text(
             interaction_text=interaction_text,
