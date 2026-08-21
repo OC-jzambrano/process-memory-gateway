@@ -1,4 +1,4 @@
-from src.models.enums import DecisionType, ExtractionMode
+from src.models.enums import DecisionType
 
 def test_extraction_result_field_presence(memory_tools):
     result = memory_tools.extract_memory_candidates("Some rule must be followed.", "test_client", "general")

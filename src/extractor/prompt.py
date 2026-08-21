@@ -1,4 +1,3 @@
-import re
 
 SYSTEM_EXTRACTION_PROMPT = """You are an expert AI Operational Knowledge Extractor specializing in ERP (Odoo) and business process modeling.
 

@@ -11,9 +11,9 @@ from src.storage.repository import MemoryRepository
 from src.storage.db import init_db
 from src.extractor.service import BedrockExtractorService
 from src.api.memory_tools import ProcessMemoryTools
-from src.models.schemas import Client, ExtractionSession, CandidateRule, Principal
+from src.models.schemas import Client, ExtractionSession, CandidateRule
 from src.models.enums import (
-    RuleStatus, RuleType, Severity, EnforcementMode, DecisionType
+    RuleStatus, RuleType, Severity, EnforcementMode
 )
 
 # --- PYTEST MARKERS ---

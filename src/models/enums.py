@@ -44,6 +44,13 @@ class SourceType(str, Enum):
     SLACK_MESSAGE = "slack_message"
     DOCUMENT_UPLOAD = "document_upload"
 
+class LLMProviderType(str, Enum):
+    OPENAI = "openai"
+    BEDROCK = "bedrock"
+    AUTO = "auto"
+    LOCAL = "local"
+
 class ExtractionMode(str, Enum):
+    OPENAI_LLM = "openai_llm"
     BEDROCK_LLM = "bedrock_llm"
     LOCAL_FALLBACK = "local_fallback"

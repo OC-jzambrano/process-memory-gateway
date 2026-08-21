@@ -1,57 +1,88 @@
-import json
 import uuid
 import re
 import logging
-from typing import Optional, List
-import boto3
+from typing import Optional, List, Union
 
 from src.config import (
+    LLM_PROVIDER,
+    OPENAI_API_KEY,
+    OPENAI_MODEL_ID,
     AWS_REGION,
-    AWS_ACCESS_KEY_ID,
-    AWS_SECRET_ACCESS_KEY,
     BEDROCK_MODEL_ID,
     FALLBACK_MODEL_IDS
 )
 from src.models.schemas import (
     CandidateRule,
     ExtractedPayload,
-    ExtractedRuleItem,
     ExtractionResult
 )
-from src.models.enums import RuleStatus, SourceType, RuleType, Severity, EnforcementMode, ExtractionMode
-from src.extractor.prompt import SYSTEM_EXTRACTION_PROMPT, build_user_prompt
+from src.models.enums import RuleStatus, SourceType, ExtractionMode, LLMProviderType
+from src.extractor.prompt import build_user_prompt
+from src.extractor.providers import (
+    OpenAIProvider,
+    BedrockProvider,
+    LocalFallbackProvider
+)
 
 logger = logging.getLogger(__name__)
 
-class BedrockExtractorService:
+class ProcessMemoryExtractorService:
+    """
+    Multi-Provider LLM Extraction Service.
+    Supports OpenAI, AWS Bedrock, and Local Fallback with configurable cascade strategies.
+    """
     def __init__(
         self,
-        region_name: str = AWS_REGION,
-        model_id: Optional[str] = None,
-        offline_mode: bool = False
+        provider: Optional[Union[str, LLMProviderType]] = None,
+        offline_mode: bool = False,
+        openai_api_key: Optional[str] = None,
+        openai_model_id: Optional[str] = None,
+        bedrock_region: Optional[str] = None,
+        bedrock_model_id: Optional[str] = None,
+        # Backward-compatible kwargs
+        region_name: Optional[str] = None,
+        model_id: Optional[str] = None
     ):
-        self.region_name = region_name
-        self.model_id = model_id or BEDROCK_MODEL_ID
-        self.fallback_models = FALLBACK_MODEL_IDS
+        if isinstance(provider, LLMProviderType):
+            self.provider_type = provider
+        elif provider:
+            self.provider_type = LLMProviderType(str(provider).lower())
+        else:
+            self.provider_type = LLMProviderType(str(LLM_PROVIDER).lower())
+
         self.offline_mode = offline_mode
-        self._client = None
 
-    def _get_client(self):
-        if self._client is None:
-            self._client = boto3.client(
-                'bedrock-runtime',
-                region_name=self.region_name,
-                aws_access_key_id=AWS_ACCESS_KEY_ID,
-                aws_secret_access_key=AWS_SECRET_ACCESS_KEY
-            )
-        return self._client
+        # OpenAI settings
+        self.openai_api_key = openai_api_key or OPENAI_API_KEY
+        self.openai_model_id = openai_model_id or OPENAI_MODEL_ID
 
-    def _clean_json_response(self, text: str) -> str:
+        # Bedrock settings
+        self.bedrock_region = bedrock_region or region_name or AWS_REGION
+        self.bedrock_model_id = bedrock_model_id or model_id or BEDROCK_MODEL_ID
+        self.model_id = self.bedrock_model_id
+
+        # Providers
+        self.fallback_provider = LocalFallbackProvider()
+        self.openai_provider = OpenAIProvider(api_key=self.openai_api_key, model_id=self.openai_model_id)
+        self.bedrock_provider = BedrockProvider(
+            region_name=self.bedrock_region,
+            model_id=self.bedrock_model_id,
+            fallback_models=FALLBACK_MODEL_IDS
+        )
+
+    @staticmethod
+    def _clean_json_response(text: str) -> str:
+        """Strips markdown fences from JSON output."""
         text = text.strip()
         match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', text)
         if match:
             return match.group(1).strip()
         return text
+
+    @staticmethod
+    def _fallback_local_extraction(text: str, reason: str = "Fallback heuristic parser") -> ExtractedPayload:
+        """Deterministic keyword parser."""
+        return LocalFallbackProvider().extract("", text, reason=reason)
 
     def _validate_provenance(self, source_quote: str, interaction_text: str) -> bool:
         """
@@ -64,114 +95,48 @@ class BedrockExtractorService:
         clean_text = " ".join(interaction_text.strip().split()).lower()
         return clean_quote in clean_text
 
-    def _fallback_local_extraction(self, text: str, reason: str = "Fallback heuristic parser") -> ExtractedPayload:
+    def _invoke_cascade(self, prompt: str, interaction_text: str) -> ExtractedPayload:
         """
-        Deterministic rule extraction parser used when Bedrock is awaiting token quota or offline.
-        Assigns capped confidence scores (max 0.75) to reflect heuristic nature.
+        Executes extraction cascade according to configured provider strategy:
+        - "openai":  OpenAI -> Bedrock -> Local Fallback
+        - "bedrock": Bedrock -> OpenAI -> Local Fallback
+        - "auto":    OpenAI (if key) -> Bedrock (if key) -> Local Fallback
+        - "local":   Local Fallback
         """
-        rules: List[ExtractedRuleItem] = []
-        sentences = [s.strip() for s in re.split(r'[.\n]', text) if s.strip()]
+        if self.offline_mode or self.provider_type == LLMProviderType.LOCAL:
+            return self.fallback_provider.extract(prompt, interaction_text, reason="Configured offline/local mode")
 
-        for s in sentences:
-            s_lower = s.lower()
-            rule_text = f"{s.strip()}." if not s.endswith('.') else s.strip()
+        cascade_errors = []
 
-            # 1. Approval policies
-            if any(k in s_lower for k in ["approval", "approved", "leader", "lead", "sign-off", "permission"]):
-                rules.append(ExtractedRuleItem(
-                    rule_text=rule_text,
-                    rule_type=RuleType.APPROVAL_POLICY,
-                    severity=Severity.CRITICAL,
-                    enforcement_mode=EnforcementMode.REQUIRES_APPROVAL,
-                    source_quote=s,
-                    confidence=0.75
-                ))
-            # 2. Naming conventions
-            elif any(k in s_lower for k in ["version", "naming", "prefix", "suffix", "format", "name"]):
-                rules.append(ExtractedRuleItem(
-                    rule_text=rule_text,
-                    rule_type=RuleType.NAMING_CONVENTION,
-                    severity=Severity.WARNING,
-                    enforcement_mode=EnforcementMode.ADVISORY,
-                    source_quote=s,
-                    confidence=0.72
-                ))
-            # 3. Data validation / duplicate rules
-            elif any(k in s_lower for k in ["duplicate", "sku", "unique", "validate", "validation", "exist"]):
-                rules.append(ExtractedRuleItem(
-                    rule_text=rule_text,
-                    rule_type=RuleType.DATA_VALIDATION,
-                    severity=Severity.CRITICAL,
-                    enforcement_mode=EnforcementMode.BLOCKING,
-                    source_quote=s,
-                    confidence=0.74
-                ))
-            # 4. General operational constraints
-            elif any(k in s_lower for k in ["must", "only", "never", "cannot", "do not", "required"]):
-                rules.append(ExtractedRuleItem(
-                    rule_text=rule_text,
-                    rule_type=RuleType.OPERATIONAL_CONSTRAINT,
-                    severity=Severity.WARNING,
-                    enforcement_mode=EnforcementMode.BLOCKING,
-                    source_quote=s,
-                    confidence=0.70
-                ))
+        # 1. Primary: OpenAI
+        if self.provider_type in (LLMProviderType.OPENAI, LLMProviderType.AUTO):
+            if self.openai_api_key:
+                try:
+                    return self.openai_provider.extract(prompt, interaction_text)
+                except Exception as e:
+                    logger.warning(f"OpenAI extraction failed: {e}. Falling back to next provider in cascade.")
+                    cascade_errors.append(f"OpenAI: {e}")
 
-        return ExtractedPayload(
-            rules=rules,
-            reasoning=f"Extracted via heuristic parser (mode: fallback - {reason})",
-            extraction_mode=ExtractionMode.LOCAL_FALLBACK,
-            error_detail=reason
-        )
-
-    def _invoke_bedrock(self, prompt: str, interaction_text: str) -> ExtractedPayload:
-        """
-        Attempts model invocation cascade via configured Bedrock models.
-        If offline_mode is True, skips network call and directly uses deterministic fallback.
-        """
-        if self.offline_mode:
-            return self._fallback_local_extraction(interaction_text, reason="Offline mode configured")
-
-        client = self._get_client()
-        body = json.dumps({
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": 2048,
-            "temperature": 0.0,
-            "system": SYSTEM_EXTRACTION_PROMPT,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ]
-        })
-
-        models_to_try = [self.model_id] + [m for m in self.fallback_models if m != self.model_id]
-        last_error = None
-
-        for m_id in models_to_try:
+        # 2. Secondary / Primary: Bedrock
+        if self.provider_type in (LLMProviderType.BEDROCK, LLMProviderType.OPENAI, LLMProviderType.AUTO):
             try:
-                response = client.invoke_model(
-                    modelId=m_id,
-                    body=body
-                )
-                response_body = json.loads(response['body'].read().decode('utf-8'))
-                raw_text = response_body['content'][0]['text']
-                cleaned_json = self._clean_json_response(raw_text)
-                parsed_dict = json.loads(cleaned_json)
-                self.model_id = m_id
-                
-                payload = ExtractedPayload(**parsed_dict)
-                payload.extraction_mode = ExtractionMode.BEDROCK_LLM
-                return payload
+                return self.bedrock_provider.extract(prompt, interaction_text)
             except Exception as e:
-                last_error = str(e)
-                logger.warning(f"Bedrock model '{m_id}' failed: {e}. Trying next model in cascade.")
-                continue
+                logger.warning(f"Bedrock extraction failed: {e}. Falling back to next provider in cascade.")
+                cascade_errors.append(f"Bedrock: {e}")
 
-        # Explicit fallback with logged diagnosis
-        logger.info(f"All Bedrock models unavailable. Activating local deterministic fallback. Reason: {last_error}")
-        return self._fallback_local_extraction(interaction_text, reason=str(last_error))
+        # 3. Tertiary: Try OpenAI if Bedrock was primary and failed
+        if self.provider_type == LLMProviderType.BEDROCK and self.openai_api_key:
+            try:
+                return self.openai_provider.extract(prompt, interaction_text)
+            except Exception as e:
+                logger.warning(f"Secondary OpenAI extraction failed: {e}.")
+                cascade_errors.append(f"OpenAI fallback: {e}")
+
+        # 4. Final Deterministic Fallback
+        reason_str = "; ".join(cascade_errors) if cascade_errors else "All cloud providers bypassed"
+        logger.info(f"Activating deterministic local fallback. Reason: {reason_str}")
+        return self.fallback_provider.extract(prompt, interaction_text, reason=reason_str)
 
     def extract_from_text(
         self,
@@ -198,7 +163,7 @@ class BedrockExtractorService:
         session_id = f"sess_{uuid.uuid4().hex}"
         user_prompt = build_user_prompt(interaction_text, client_id, process_name)
 
-        extracted_payload = self._invoke_bedrock(user_prompt, interaction_text)
+        extracted_payload = self._invoke_cascade(user_prompt, interaction_text)
 
         candidates: List[CandidateRule] = []
         for item in extracted_payload.rules:
@@ -232,3 +197,6 @@ class BedrockExtractorService:
             error_detail=extracted_payload.error_detail,
             raw_payload=extracted_payload
         )
+
+# Backward Compatibility Alias
+BedrockExtractorService = ProcessMemoryExtractorService

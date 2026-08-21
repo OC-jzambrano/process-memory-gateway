@@ -12,6 +12,13 @@ DEFAULT_DB_PATH = DATA_DIR / "process_memory.db"
 # Load environment variables from .env
 load_dotenv(dotenv_path=ENV_PATH)
 
+# Primary LLM Provider: "openai", "bedrock", "auto", "local"
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai").lower()
+
+# Direct OpenAI API Settings
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_MODEL_ID = os.getenv("OPENAI_MODEL_ID", "gpt-4o-mini")
+
 # AWS & Bedrock Settings
 AWS_REGION = os.getenv("AWS_REGION", "eu-north-1")
 AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID", "")

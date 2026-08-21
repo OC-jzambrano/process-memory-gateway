@@ -1,6 +1,6 @@
 import sqlite3
 import pytest
-from src.models.enums import DecisionType, RuleStatus, RuleType
+from src.models.enums import DecisionType, RuleType
 from src.models.schemas import ExtractionSession, CandidateRule
 
 def test_sql_injection_in_client_id_is_harmless(repo):

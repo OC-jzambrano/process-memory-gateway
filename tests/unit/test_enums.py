@@ -7,7 +7,8 @@ from src.models.enums import (
     DecisionType,
     SourceType,
     EventType,
-    ExtractionMode
+    ExtractionMode,
+    LLMProviderType
 )
 
 def test_rule_type_has_six_members():
@@ -39,7 +40,10 @@ def test_event_type_values():
     assert set(e.value for e in EventType) == {"candidate_review", "rule_superseded", "rule_archived"}
 
 def test_extraction_mode_values():
-    assert set(m.value for m in ExtractionMode) == {"bedrock_llm", "local_fallback"}
+    assert set(m.value for m in ExtractionMode) == {"openai_llm", "bedrock_llm", "local_fallback"}
+
+def test_llm_provider_type_values():
+    assert set(p.value for p in LLMProviderType) == {"openai", "bedrock", "auto", "local"}
 
 def test_enforcement_mode_values():
     assert set(e.value for e in EnforcementMode) == {"blocking", "requires_approval", "advisory"}

@@ -2,17 +2,12 @@ import pytest
 from pydantic import ValidationError
 from src.models.schemas import (
     Client,
-    BusinessProcess,
-    ExtractionSession,
     CandidateRule,
     CanonicalRule,
-    ReviewEvent,
     ExtractedRuleItem,
-    ExtractedPayload,
-    ExtractionResult,
     Principal
 )
-from src.models.enums import RuleStatus, Severity, RuleType, EnforcementMode, DecisionType, SourceType, EventType
+from src.models.enums import RuleStatus, Severity, RuleType, EnforcementMode
 
 def test_confidence_above_max_rejected():
     with pytest.raises(ValidationError):

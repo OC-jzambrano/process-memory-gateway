@@ -1,6 +1,4 @@
-import pytest
-from src.models.schemas import CandidateRule
-from src.models.enums import RuleStatus, RuleType, Severity, EnforcementMode, DecisionType
+from src.models.enums import RuleStatus, RuleType, DecisionType
 
 def test_approve_candidate_lifecycle(repo, make_candidate):
     make_candidate(
