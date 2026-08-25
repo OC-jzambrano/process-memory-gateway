@@ -1,166 +1,263 @@
 import json
 import logging
-from typing import Optional
+from typing import Optional, List, Dict, Any, Literal
+
 from mcp.server.fastmcp import FastMCP
+from src.storage.repository import MemoryRepository
+from src.extractor.service import ProcessMemoryExtractorService
+from src.integrations.odoo17_xmlrpc import Odoo17XmlRpcExecutor
+from src.api.service import HostedProcessMemoryService
+from src.api.auth_context import set_current_context, AuthContextResolver
+from src.models.schemas import (
+    ActionContext,
+    DeterministicConstraint,
+    CandidateResult,
+    ReviewResult,
+    TaskCreationResult,
+    MemoryPack,
+    CandidateRule,
+    CanonicalRule,
+    RequestContext
+)
+from src.models.enums import RoleType
 
-from src.api.memory_tools import ProcessMemoryTools
-from src.models.schemas import Principal
-from src.models.enums import RuleStatus, DecisionType
+logger = logging.getLogger(__name__)
 
-# Configure Logging (to stderr so stdout is reserved for JSON-RPC transport)
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-logger = logging.getLogger("process-memory-mcp")
+# Initialize singletons
+repo = MemoryRepository()
+extractor = ProcessMemoryExtractorService()
 
-# Initialize FastMCP Server
-mcp = FastMCP("odoo-process-memory")
-tools = ProcessMemoryTools()
+try:
+    executor = Odoo17XmlRpcExecutor.from_env()
+except Exception:
+    from src.integrations.mock_executor import MockTaskExecutor
+    executor = MockTaskExecutor(default_project_id=142)
 
+service = HostedProcessMemoryService(repo=repo, extractor=extractor, executor=executor)
+
+# Create FastMCP Server Instance
+mcp = FastMCP("AWS-Process-Memory-Gateway", dependencies=["pydantic", "fastmcp"])
+
+# --- 1. REMEMBER COMPANY INSTRUCTION ---
 @mcp.tool()
-def extract_memory_candidates(
-    interaction_text: str,
-    client_id: str,
-    process_name: str = "general",
-    reviewer_user_id: str = "ai_agent"
+def remember_company_instruction(
+    instruction_text: str,
+    context_hint: Optional[Dict[str, Any]] = None
 ) -> str:
     """
-    Analyzes user or consultant dialogue to extract tacit and explicit operational business rules.
-    Attaches exact source quotes, confidence scores, and stages rules in 'pending_review' status.
-    
-    Args:
-        interaction_text: The conversational text or user dialogue turn to analyze.
-        client_id: The unique tenant / client identifier.
-        process_name: The ERP business process context (e.g. 'mrp', 'sales', 'inventory', 'general').
-        reviewer_user_id: Identifier of the agent or caller initiating the extraction.
-    """
-    principal = Principal(client_id=client_id, user_id=reviewer_user_id, role="agent")
-    result = tools.extract_memory_candidates(
-        interaction_text=interaction_text,
-        client_id=client_id,
-        process_name=process_name,
-        principal=principal
-    )
-    
-    output = {
-        "session_id": result.session_id,
-        "client_id": result.client_id,
-        "process_name": result.process_name,
-        "extraction_mode": result.extraction_mode.value,
-        "candidates_count": len(result.candidates),
-        "candidates": [c.model_dump() for c in result.candidates]
-    }
-    return json.dumps(output, indent=2)
+    Stages a proposed company instruction or business rule into memory_candidates (pending_review).
+    Does NOT activate or enforce the rule until approved by a company owner or reviewer.
 
+    Args:
+        instruction_text: Natural language statement of the company policy, constraint, or naming rule.
+        context_hint: Optional structured dictionary indicating target system, application, resource, or field.
+
+    Returns:
+        JSON string containing CandidateResult with candidate ID, previewed scope, constraint, and status.
+    """
+    scope = ActionContext(**context_hint) if context_hint else None
+    result = service.remember_company_instruction(
+        instruction_text=instruction_text,
+        context_hint=scope
+    )
+    return result.model_dump_json(indent=2)
+
+# --- 2. LIST MEMORY CANDIDATES ---
 @mcp.tool()
-def get_candidate_rules(
-    client_id: str,
-    status: str = "pending_review",
-    process_name: Optional[str] = None,
-    reviewer_user_id: str = "ai_agent"
+def list_memory_candidates(
+    status: str = "pending_review"
 ) -> str:
     """
-    Retrieves candidate rules awaiting human review for a given client/tenant.
-    
-    Args:
-        client_id: The unique tenant / client identifier.
-        status: Status filter ('pending_review', 'approved', 'rejected'). Defaults to 'pending_review'.
-        process_name: Optional business process filter.
-        reviewer_user_id: Identifier of the caller.
-    """
-    principal = Principal(client_id=client_id, user_id=reviewer_user_id)
-    candidates = tools.get_candidate_rules(
-        client_id=client_id,
-        status=RuleStatus(status.lower()) if status else RuleStatus.PENDING_REVIEW,
-        process_name=process_name,
-        principal=principal
-    )
-    
-    output = {
-        "client_id": client_id,
-        "count": len(candidates),
-        "candidates": [c.model_dump() for c in candidates]
-    }
-    return json.dumps(output, indent=2)
+    Lists staged memory candidates for the authenticated company awaiting human review.
 
+    Args:
+        status: Status filter, defaults to 'pending_review'.
+
+    Returns:
+        JSON string containing list of Candidate rules.
+    """
+    candidates = service.list_memory_candidates(status=status)
+    return json.dumps([c.model_dump() for c in candidates], indent=2)
+
+# --- 3. REVIEW MEMORY CANDIDATE ---
 @mcp.tool()
-def review_candidate_rule(
+def review_memory_candidate(
     candidate_id: str,
-    decision: str,
-    reviewer: str,
-    client_id: str,
+    decision: Literal["approve", "edit", "reject"],
     edited_rule_text: Optional[str] = None,
+    edited_scope: Optional[Dict[str, Any]] = None,
+    edited_constraint: Optional[Dict[str, Any]] = None,
     notes: Optional[str] = None
 ) -> str:
     """
-    Processes human sign-off on a candidate rule:
-    - 'approve': Promotes candidate to active canonical rule (v1).
-    - 'edit': Promotes edited rule text to active canonical rule.
-    - 'reject': Marks candidate as rejected.
-    Records an immutable audit event in review_events.
-    
+    Processes human sign-off on a staged memory candidate.
+    Approving promotes the candidate into an active, versioned Canonical Rule.
+
     Args:
-        candidate_id: Unique identifier of the candidate rule to review.
-        decision: Review decision ('approve', 'reject', 'edit').
-        reviewer: Name or user ID of the human reviewer.
-        client_id: Tenant / client identifier.
-        edited_rule_text: Refined rule text (required if decision is 'edit').
-        notes: Optional explanation or context for the decision.
+        candidate_id: ID of the candidate to review (e.g. 'cand_abc123').
+        decision: 'approve', 'edit', or 'reject'.
+        edited_rule_text: Refined rule text if decision is 'edit'.
+        edited_scope: Optional modified scope dictionary.
+        edited_constraint: Optional modified deterministic constraint dictionary.
+        notes: Optional audit notes explaining the review rationale.
+
+    Returns:
+        JSON string containing ReviewResult.
     """
-    principal = Principal(client_id=client_id, user_id=reviewer, role="reviewer")
-    canonical_rule = tools.review_candidate_rule(
+    scope = ActionContext(**edited_scope) if edited_scope else None
+    result = service.review_memory_candidate(
         candidate_id=candidate_id,
-        decision=DecisionType(decision.lower()),
-        reviewer=reviewer,
-        client_id=client_id,
+        decision=decision,
         edited_rule_text=edited_rule_text,
-        notes=notes,
-        principal=principal
+        edited_scope=scope,
+        edited_constraint=edited_constraint,
+        notes=notes
     )
-    
-    if canonical_rule:
-        output = {
-            "status": "success",
-            "decision": decision,
-            "message": f"Candidate '{candidate_id}' promoted to Canonical Rule '{canonical_rule.rule_id}' (version {canonical_rule.version}).",
-            "canonical_rule": canonical_rule.model_dump()
-        }
-    else:
-        output = {
-            "status": "success",
-            "decision": decision,
-            "message": f"Candidate '{candidate_id}' was rejected and archived."
-        }
-    return json.dumps(output, indent=2)
+    return result.model_dump_json(indent=2)
+
+# --- 4. GET COMPANY CONTEXT (MEMORY PACK) ---
+@mcp.tool()
+def get_company_context(
+    system: str = "odoo",
+    application: Optional[str] = None,
+    resource: Optional[str] = None,
+    operation: Optional[str] = None,
+    fields: Optional[List[str]] = None
+) -> str:
+    """
+    Retrieves a small, relevant Memory Pack of active canonical rules for the authenticated company.
+
+    Args:
+        system: Target system, defaults to 'odoo'.
+        application: Target application, e.g. 'project'.
+        resource: Target resource/model, e.g. 'project.task'.
+        operation: Target operation, e.g. 'create'.
+        fields: Optional list of field names, e.g. ['definition_of_done'].
+
+    Returns:
+        JSON string containing MemoryPack with active rules, versions, scopes, and constraints.
+    """
+    pack = service.get_company_context(
+        system=system,
+        application=application,
+        resource=resource,
+        operation=operation,
+        fields=fields
+    )
+    return pack.model_dump_json(indent=2)
+
+# --- 5. CREATE PROJECT TASK (MANAGED ODOO WRITE TOOL) ---
+@mcp.tool()
+def create_project_task(
+    title: str,
+    description: str,
+    definition_of_done: Optional[List[str]] = None,
+    project_id: Optional[int] = None,
+    correlation_id: Optional[str] = None
+) -> str:
+    """
+    Managed Odoo Task Creation Tool.
+    Retrieves approved company memory internally, validates required fields (e.g. Definition of Done),
+    creates an execution evidence record, and executes the task creation in Odoo with read-back verification.
+
+    Args:
+        title: Task name / title.
+        description: Task description in plain text.
+        definition_of_done: Optional list of measurable Definition of Done checklist items.
+        project_id: Odoo project ID, defaults to 142 (IH/AI/Odoo Tutor).
+        correlation_id: Unique idempotency key to prevent duplicate creation on retry.
+
+    Returns:
+        JSON string containing TaskCreationResult with run_id, correlation_id, status, odoo_task_id, and URL.
+    """
+    result = service.create_project_task(
+        title=title,
+        description=description,
+        definition_of_done=definition_of_done,
+        project_id=project_id,
+        correlation_id=correlation_id
+    )
+    return result.model_dump_json(indent=2)
+
+# --- BACKWARD COMPATIBILITY ALIASES ---
+@mcp.tool()
+def extract_memory_candidates(
+    interaction_text: str,
+    client_id: str = "odooconcept_demo",
+    process_name: str = "general"
+) -> str:
+    from src.api.memory_tools import ProcessMemoryTools
+    tools = ProcessMemoryTools(repo=repo, extractor=extractor)
+    result = tools.extract_memory_candidates(
+        interaction_text=interaction_text,
+        client_id=client_id,
+        process_name=process_name
+    )
+    return json.dumps({
+        "session_id": result.session_id,
+        "client_id": result.client_id,
+        "process_name": result.process_name,
+        "candidates_count": len(result.candidates),
+        "extraction_mode": result.extraction_mode.value,
+        "candidates": [c.model_dump() for c in result.candidates]
+    }, indent=2)
+
+@mcp.tool()
+def get_candidate_rules(
+    client_id: str = "odooconcept_demo",
+    status: str = "pending_review"
+) -> str:
+    from src.api.memory_tools import ProcessMemoryTools
+    tools = ProcessMemoryTools(repo=repo, extractor=extractor)
+    candidates = tools.get_candidate_rules(client_id=client_id, status=status)
+    return json.dumps({
+        "client_id": client_id,
+        "status": status,
+        "count": len(candidates),
+        "candidates": [c.model_dump() for c in candidates]
+    }, indent=2)
 
 @mcp.tool()
 def get_active_rules(
-    client_id: str,
-    process_name: Optional[str] = None,
-    reviewer_user_id: str = "ai_agent"
+    client_id: str = "odooconcept_demo",
+    process_name: Optional[str] = None
 ) -> str:
-    """
-    Retrieves approved, active canonical business rules for policy enforcement and context retrieval.
-    GUARANTEE: Unapproved 'pending_review' candidate rules are NEVER returned.
-    
-    Args:
-        client_id: The unique tenant / client identifier.
-        process_name: Optional process context (e.g. 'mrp', 'inventory'). Returns process rules + general rules.
-        reviewer_user_id: Identifier of the caller.
-    """
-    principal = Principal(client_id=client_id, user_id=reviewer_user_id)
-    rules = tools.get_active_rules(
-        client_id=client_id,
-        process_name=process_name,
-        principal=principal
-    )
-    
-    output = {
+    from src.api.memory_tools import ProcessMemoryTools
+    tools = ProcessMemoryTools(repo=repo, extractor=extractor)
+    rules = tools.get_active_rules(client_id=client_id, process_name=process_name)
+    return json.dumps({
         "client_id": client_id,
         "process_name": process_name or "all",
         "active_rules_count": len(rules),
         "rules": [r.model_dump() for r in rules]
-    }
-    return json.dumps(output, indent=2)
+    }, indent=2)
+
+@mcp.tool()
+def review_candidate_rule(
+    candidate_id: str,
+    decision: str = "approve",
+    reviewer: str = "juan_zambrano",
+    client_id: str = "odooconcept_demo",
+    edited_rule_text: Optional[str] = None,
+    notes: Optional[str] = None
+) -> str:
+    from src.api.memory_tools import ProcessMemoryTools
+    tools = ProcessMemoryTools(repo=repo, extractor=extractor)
+    canonical_rule = tools.review_candidate_rule(
+        candidate_id=candidate_id,
+        decision=decision,
+        reviewer=reviewer,
+        client_id=client_id,
+        edited_rule_text=edited_rule_text,
+        notes=notes
+    )
+    return json.dumps({
+        "status": "success" if canonical_rule else "rejected",
+        "candidate_id": candidate_id,
+        "decision": decision,
+        "rule_id": canonical_rule.rule_id if canonical_rule else None,
+        "rule": canonical_rule.model_dump() if canonical_rule else None
+    }, indent=2)
 
 if __name__ == "__main__":
-    logger.info("Starting Process Memory MCP Server (stdio transport)...")
-    mcp.run(transport="stdio")
+    mcp.run()

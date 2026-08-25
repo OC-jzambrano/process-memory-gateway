@@ -198,5 +198,9 @@ class ProcessMemoryExtractorService:
             raw_payload=extracted_payload
         )
 
+    def extract_candidates(self, *args, **kwargs) -> ExtractionResult:
+        """Alias for extract_from_text."""
+        return self.extract_from_text(*args, **kwargs)
+
 # Backward Compatibility Alias
 BedrockExtractorService = ProcessMemoryExtractorService

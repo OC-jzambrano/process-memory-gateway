@@ -1,0 +1,14 @@
+.env
+*.env
+data/
+*.db
+.git/
+__pycache__/
+.pytest_cache/
+.coverage
+scratch/
+.venv/
+*.pyc
+.idea/
+.vscode/
+tests/

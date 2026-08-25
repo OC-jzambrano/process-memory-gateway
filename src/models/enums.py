@@ -54,3 +54,36 @@ class ExtractionMode(str, Enum):
     OPENAI_LLM = "openai_llm"
     BEDROCK_LLM = "bedrock_llm"
     LOCAL_FALLBACK = "local_fallback"
+
+class RoleType(str, Enum):
+    OWNER = "owner"
+    REVIEWER = "reviewer"
+    OPERATOR = "operator"
+    AUDITOR = "auditor"
+    MEMBER = "member"
+
+class RunStatus(str, Enum):
+    NEEDS_CLARIFICATION = "needs_clarification"
+    CREATED = "created"
+    FAILED = "failed"
+    RECONCILIATION_REQUIRED = "reconciliation_required"
+
+class ConstraintKind(str, Enum):
+    REQUIRED_NONEMPTY_LIST = "required_nonempty_list"
+    PATTERN_MATCH = "pattern_match"
+    THRESHOLD_LIMIT = "threshold_limit"
+
+class CompanyStatus(str, Enum):
+    ACTIVE = "active"
+    SUSPENDED = "suspended"
+
+class MembershipStatus(str, Enum):
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+    INVITED = "invited"
+
+class ExecutionEventType(str, Enum):
+    RUN_STARTED = "run_started"
+    VALIDATION_FAILED = "validation_failed"
+    TASK_CREATED = "task_created"
+    RECONCILIATION_FLAGGED = "reconciliation_flagged"
