@@ -1,6 +1,6 @@
 import pytest
 import inspect
-from src.integrations.odoo17_xmlrpc import Odoo17XmlRpcExecutor, OdooExecutionError, OdooAccessDeniedError
+from src.integrations.odoo17_xmlrpc import Odoo17XmlRpcExecutor, OdooExecutionError
 from src.models.schemas import OdooConnectionConfig
 
 def test_executor_construction_fails_without_credentials():

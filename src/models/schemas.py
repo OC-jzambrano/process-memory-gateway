@@ -1,4 +1,4 @@
-from typing import Optional, List, Dict, Any, Literal
+from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field, field_validator
 from src.models.enums import (
     RuleType,
@@ -14,7 +14,8 @@ from src.models.enums import (
     ConstraintKind,
     CompanyStatus,
     MembershipStatus,
-    ExecutionEventType
+    ExecutionEventType,
+    ExecutionPhase
 )
 
 # 1. Action Scope & Deterministic Constraints
@@ -86,6 +87,7 @@ class OdooConnectionConfig(BaseModel):
     odoo_url: str = Field(default="https://community.odooconcept.com")
     odoo_db: str = Field(default="community")
     default_project_id: int = Field(default=142)
+    status: str = Field(default="active")
     created_at: Optional[str] = None
 
 # Backward compatibility Client & BusinessProcess
@@ -218,6 +220,7 @@ class TaskCreationResult(BaseModel):
     odoo_task_id: Optional[int] = None
     odoo_task_url: Optional[str] = None
     task_name: Optional[str] = None
+    error_code: Optional[str] = None
     message: str
 
 class TaskRecord(BaseModel):
@@ -226,6 +229,14 @@ class TaskRecord(BaseModel):
     description: str
     project_id: int
     project_name: Optional[str] = None
+
+class CreateTaskOutcome(BaseModel):
+    phase: ExecutionPhase
+    task_id: Optional[int] = None
+    task_record: Optional[TaskRecord] = None
+    is_success: bool = False
+    error_code: Optional[str] = None
+    error_detail: Optional[str] = None
 
 # 10. Execution Runs & Evidence Records
 class ExecutionRunRecord(BaseModel):
@@ -237,10 +248,14 @@ class ExecutionRunRecord(BaseModel):
     adapter_kind: str = Field(default="odoo17_xmlrpc")
     status: RunStatus = Field(default=RunStatus.CREATED)
     redacted_input_hash: Optional[str] = None
+    hash_algorithm_version: str = Field(default="v2")
+    connection_snapshot: Optional[Dict[str, Any]] = None
+    execution_token: Optional[str] = None
     applied_rules_snapshot: List[Dict[str, Any]] = Field(default_factory=list)
     odoo_task_id: Optional[int] = None
     odoo_task_url: Optional[str] = None
     result_payload: Dict[str, Any] = Field(default_factory=dict)
+    error_code: Optional[str] = None
     error_detail: Optional[str] = None
     created_at: Optional[str] = None
 

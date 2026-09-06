@@ -9,8 +9,6 @@ from src.storage.repository import MemoryRepository
 from src.extractor.service import ProcessMemoryExtractorService
 from server import (
     create_mcp_server,
-    register_tools,
-    get_default_server,
     remember_company_instruction,
     list_memory_candidates,
     review_memory_candidate,
@@ -29,7 +27,6 @@ from src.models.schemas import (
     ReviewResult,
     MemoryPack,
     MemoryPackRuleItem,
-    CanonicalRule,
     TaskCreationResult
 )
 from src.models.enums import (

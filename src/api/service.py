@@ -2,7 +2,7 @@ import uuid
 import hashlib
 import json
 import logging
-from typing import Optional, List, Dict, Any, Literal, Union
+from typing import Optional, List, Dict, Any, Literal, Union, Callable
 from datetime import datetime, timezone
 
 from src.config import AWS_REGION, ALLOW_LIVE_ODOO_WRITES
@@ -14,13 +14,12 @@ from src.integrations.base_executor import TaskExecutor
 from src.integrations.odoo17_xmlrpc import Odoo17XmlRpcExecutor, OdooAccessDeniedError, OdooExecutionError
 from src.integrations.mock_executor import MockTaskExecutor
 from src.api.auth_context import get_current_context, AuthContextResolver
+from src.utils.privacy import sanitize_evidence
 from src.models.schemas import (
-    RequestContext,
     ActionContext,
     DeterministicConstraint,
     ExtractionSession,
     CandidateRule,
-    CanonicalRule,
     CandidateResult,
     ReviewResult,
     TaskCreationResult,
@@ -38,10 +37,42 @@ from src.models.enums import (
     EnforcementMode,
     SourceType,
     ConstraintKind,
-    ExecutionEventType
+    ExecutionEventType,
+    ExecutionPhase
 )
 
 logger = logging.getLogger(__name__)
+
+def compute_canonical_hash_v2(
+    title: str,
+    description: str,
+    definition_of_done: Optional[List[str]],
+    project_id: int,
+    action_scope: ActionContext,
+    connection_identity: Dict[str, Any]
+) -> str:
+    cleaned_dod = [
+        item.strip() for item in (definition_of_done or [])
+        if isinstance(item, str) and item.strip()
+    ]
+    payload = {
+        "title": title.strip(),
+        "description": description.strip(),
+        "definition_of_done": cleaned_dod,
+        "project_id": int(project_id),
+        "action_scope": action_scope.model_dump() if hasattr(action_scope, "model_dump") else dict(action_scope),
+        "connection_identity": connection_identity
+    }
+    canonical_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+
+def compute_legacy_hash_v1(
+    title: str,
+    description: str,
+    definition_of_done: Optional[List[str]],
+    project_id: int
+) -> str:
+    return hashlib.sha256(f"{title}:{description}:{definition_of_done}:{project_id}".encode()).hexdigest()
 
 class HostedProcessMemoryService:
     """
@@ -53,7 +84,8 @@ class HostedProcessMemoryService:
         self,
         repo: BaseRepository,
         extractor: Optional[ProcessMemoryExtractorService] = None,
-        executor: Optional[TaskExecutor] = None
+        executor: Optional[TaskExecutor] = None,
+        executor_factory: Optional[Callable[[str], TaskExecutor]] = None
     ):
         self.repo = repo
         self.extractor = extractor or ProcessMemoryExtractorService()
@@ -61,34 +93,72 @@ class HostedProcessMemoryService:
         self.validator = TaskValidator()
         self.auth_resolver = AuthContextResolver(repo=self.repo)
         self._injected_executor = executor
+        self._executor_factory = executor_factory
+
+        # Startup reconciliation: recover any runs abandoned in run_started state
+        self.repo.reconcile_abandoned_runs()
 
     def _now(self) -> str:
         return datetime.now(timezone.utc).isoformat()
 
     def resolve_executor_for_company(self, company_id: str) -> TaskExecutor:
-        """Resolves task executor for company. Fails closed if live writes are disabled or config missing."""
+        """Resolves task executor for company. Fails closed with zero environment fallback."""
+        if self._executor_factory is not None:
+            return self._executor_factory(company_id)
+
         if self._injected_executor is not None:
             return self._injected_executor
 
         conn_config = self.repo.get_odoo_connection(company_id)
-        if not conn_config:
-            try:
-                return Odoo17XmlRpcExecutor.from_env()
-            except Exception as e:
-                raise OdooExecutionError(f"No Odoo connection configured for company '{company_id}'.") from e
+        if not conn_config or conn_config.status != "active":
+            raise OdooExecutionError(f"No active Odoo connection configured for company '{company_id}'. Routing fails closed.")
 
-        if conn_config.secret_arn:
-            try:
-                import boto3
-                sm = boto3.client("secretsmanager", region_name=AWS_REGION)
-                secret_val = sm.get_secret_value(SecretId=conn_config.secret_arn)
-                secret_data = json.loads(secret_val.get("SecretString", "{}"))
-                return Odoo17XmlRpcExecutor.from_secret_dict(secret_data)
-            except Exception as e:
-                logger.error("Failed to retrieve secret from Secrets Manager: %s", str(e))
-                raise OdooExecutionError(f"Failed to retrieve Odoo secret for company '{company_id}'.") from e
+        if not conn_config.odoo_url or not conn_config.odoo_db or conn_config.default_project_id is None:
+            raise OdooExecutionError(f"Incomplete Odoo connection configuration for company '{company_id}'. Missing URL, DB, or default project.")
 
-        return Odoo17XmlRpcExecutor.from_env()
+        if not conn_config.secret_arn:
+            raise OdooExecutionError(f"Odoo connection for company '{company_id}' is missing secret_arn. Failing closed without environment fallback.")
+
+        try:
+            import boto3
+            sm = boto3.client("secretsmanager", region_name=AWS_REGION)
+            secret_val = sm.get_secret_value(SecretId=conn_config.secret_arn)
+            secret_data = json.loads(secret_val.get("SecretString", "{}"))
+        except Exception as e:
+            logger.error("Failed to retrieve secret from Secrets Manager: %s", str(e))
+            raise OdooExecutionError(f"Failed to retrieve Odoo secret for company '{company_id}'.") from e
+
+        # Validate authoritative connection record against secret payload
+        sec_url = secret_data.get("url") or secret_data.get("ODOO_URL")
+        if sec_url and sec_url.rstrip("/") != conn_config.odoo_url.rstrip("/"):
+            raise OdooExecutionError(
+                f"Conflicting Odoo URL in Secrets Manager for company '{company_id}'. Connection record is authoritative."
+            )
+
+        sec_db = secret_data.get("database") or secret_data.get("ODOO_DB")
+        if sec_db and sec_db.strip() != conn_config.odoo_db.strip():
+            raise OdooExecutionError(
+                f"Conflicting Odoo database in Secrets Manager for company '{company_id}'. Connection record is authoritative."
+            )
+
+        sec_proj = secret_data.get("default_project_id") or secret_data.get("DEFAULT_PROJECT_ID")
+        if sec_proj is not None and int(sec_proj) != int(conn_config.default_project_id):
+            raise OdooExecutionError(
+                f"Conflicting default project ID in Secrets Manager for company '{company_id}'. Connection record is authoritative."
+            )
+
+        username = secret_data.get("username") or secret_data.get("ODOO_LOGIN")
+        pwd = secret_data.get("api_key") or secret_data.get("password") or secret_data.get("ODOO_PASSWORD")
+        if not username or not pwd:
+            raise OdooExecutionError(f"Odoo credentials missing in secret payload for company '{company_id}'.")
+
+        return Odoo17XmlRpcExecutor(
+            url=conn_config.odoo_url,
+            db=conn_config.odoo_db,
+            username=username,
+            password=pwd,
+            default_project_id=conn_config.default_project_id
+        )
 
     # --- 1. REMEMBER COMPANY INSTRUCTION ---
     def remember_company_instruction(
@@ -282,67 +352,46 @@ class HostedProcessMemoryService:
         self.auth_resolver.require_role(ctx, [RoleType.OWNER, RoleType.OPERATOR, RoleType.REVIEWER])
 
         cid = correlation_id or f"corr_{uuid.uuid4().hex}"
-        target_project_id = project_id or 142
-        input_hash = hashlib.sha256(f"{title}:{description}:{definition_of_done}:{target_project_id}".encode()).hexdigest()
 
-        # 1. Idempotency and Correlation Check
-        existing_run = self.repo.get_execution_run_by_correlation(
-            company_id=ctx.company_id,
-            correlation_id=cid
-        )
-        if existing_run:
-            # Uncertain execution outcome requires manual reconciliation without retrying
-            if existing_run.status == RunStatus.RECONCILIATION_REQUIRED:
+        # 1. Resolve connection config & authoritative target project
+        conn_config = self.repo.get_odoo_connection(ctx.company_id)
+        if conn_config:
+            target_project_id = conn_config.default_project_id
+        elif hasattr(self._injected_executor, "default_project_id") and self._injected_executor.default_project_id is not None:
+            target_project_id = self._injected_executor.default_project_id
+        else:
+            try:
+                executor_probe = self.resolve_executor_for_company(ctx.company_id)
+                target_project_id = getattr(executor_probe, "default_project_id", None)
+            except Exception as e:
                 return TaskCreationResult(
-                    status=RunStatus.RECONCILIATION_REQUIRED,
-                    run_id=existing_run.run_id,
+                    status=RunStatus.FAILED,
+                    run_id=f"run_{uuid.uuid4().hex[:12]}",
                     correlation_id=cid,
-                    message="Prior execution outcome was uncertain. Manual reconciliation is required before retrying; automatic re-creation is prohibited."
+                    error_code="routing_failed",
+                    message=f"Routing failure: {str(e)}"
                 )
 
-            # Reject reuse with changed input parameters for runs that already began execution or failed
-            if existing_run.status != RunStatus.NEEDS_CLARIFICATION:
-                if existing_run.redacted_input_hash and existing_run.redacted_input_hash != input_hash:
-                    return TaskCreationResult(
-                        status=RunStatus.FAILED,
-                        run_id=existing_run.run_id,
-                        correlation_id=cid,
-                        message=f"Correlation ID '{cid}' was already used with different task parameters. Reusing correlation IDs with changed inputs is forbidden."
-                    )
-
-            # Replay successful result for identical retries
-            if existing_run.status == RunStatus.CREATED:
-                return TaskCreationResult(
-                    status=RunStatus.CREATED,
-                    run_id=existing_run.run_id,
-                    correlation_id=cid,
-                    applied_rule_ids=[r.get("rule_id") for r in existing_run.applied_rules_snapshot if "rule_id" in r],
-                    odoo_task_id=existing_run.odoo_task_id,
-                    odoo_task_url=existing_run.odoo_task_url,
-                    task_name=existing_run.result_payload.get("task_name", title),
-                    message="Idempotency match: Task was already created previously. Returned cached execution result."
-                )
-
-        # 2. Retrieve exact active rules for project.task:create
-        active_rules = self.repo.get_active_rules(client_id=ctx.company_id)
-        task_creation_rules = [
-            r for r in active_rules
-            if not r.structured_scope or (
-                (not r.structured_scope.resource or r.structured_scope.resource == "project.task") and
-                (not r.structured_scope.operation or r.structured_scope.operation == "create")
+        if target_project_id is None:
+            return TaskCreationResult(
+                status=RunStatus.FAILED,
+                run_id=f"run_{uuid.uuid4().hex[:12]}",
+                correlation_id=cid,
+                error_code="routing_failed",
+                message=f"No default project configured for company '{ctx.company_id}'."
             )
-        ]
 
-        # 3. Deterministic Task Readiness Validation
-        validation = self.validator.validate_task_creation(
-            title=title,
-            description=description,
-            definition_of_done=definition_of_done,
-            active_rules=task_creation_rules,
-            project_id=target_project_id
-        )
+        # Reject project override with 0 Odoo calls
+        if project_id is not None and int(project_id) != int(target_project_id):
+            return TaskCreationResult(
+                status=RunStatus.NEEDS_CLARIFICATION,
+                run_id=f"run_{uuid.uuid4().hex[:12]}",
+                correlation_id=cid,
+                error_code="project_override_forbidden",
+                missing_information=["project_id"],
+                message=f"Project ID override ({project_id}) is forbidden. Tasks are restricted to company configured project ({target_project_id})."
+            )
 
-        run_id = existing_run.run_id if existing_run else f"run_{uuid.uuid4().hex}"
         action_scope = ActionContext(
             system="odoo",
             application="project",
@@ -351,6 +400,102 @@ class HostedProcessMemoryService:
             fields=["name", "description", "definition_of_done", "project_id"]
         )
 
+        connection_identity = {
+            "company_id": ctx.company_id,
+            "odoo_url": conn_config.odoo_url if conn_config else "mock://odoo",
+            "odoo_db": conn_config.odoo_db if conn_config else "mock_db",
+            "default_project_id": target_project_id
+        }
+
+        input_hash_v2 = compute_canonical_hash_v2(
+            title=title,
+            description=description,
+            definition_of_done=definition_of_done,
+            project_id=target_project_id,
+            action_scope=action_scope,
+            connection_identity=connection_identity
+        )
+        input_hash_v1 = compute_legacy_hash_v1(
+            title=title,
+            description=description,
+            definition_of_done=definition_of_done,
+            project_id=target_project_id
+        )
+
+        # 2. Idempotency and Correlation Check
+        existing_run = self.repo.get_execution_run_by_correlation(
+            company_id=ctx.company_id,
+            correlation_id=cid
+        )
+        if existing_run:
+            if existing_run.status == RunStatus.RECONCILIATION_REQUIRED:
+                return TaskCreationResult(
+                    status=RunStatus.RECONCILIATION_REQUIRED,
+                    run_id=existing_run.run_id,
+                    correlation_id=cid,
+                    error_code="reconciliation_required",
+                    odoo_task_id=existing_run.odoo_task_id,
+                    odoo_task_url=existing_run.odoo_task_url,
+                    message="Prior execution outcome was uncertain. Manual reconciliation is required before retrying; automatic re-creation is prohibited."
+                )
+
+            if existing_run.status == RunStatus.RUN_STARTED:
+                return TaskCreationResult(
+                    status=RunStatus.RUN_STARTED,
+                    run_id=existing_run.run_id,
+                    correlation_id=cid,
+                    error_code="run_in_progress",
+                    message="Task creation is already in progress for this correlation ID."
+                )
+
+            if existing_run.status in (RunStatus.CREATED, RunStatus.FAILED):
+                stored_hash = existing_run.redacted_input_hash
+                if existing_run.hash_algorithm_version == "v1":
+                    matches_stored = (stored_hash == input_hash_v1)
+                else:
+                    matches_stored = (stored_hash == input_hash_v2)
+
+                if not matches_stored:
+                    return TaskCreationResult(
+                        status=RunStatus.FAILED,
+                        run_id=existing_run.run_id,
+                        correlation_id=cid,
+                        error_code="idempotency_conflict",
+                        message=f"Correlation ID '{cid}' was already used with different task parameters. Reusing correlation IDs with changed inputs is forbidden."
+                    )
+
+                if existing_run.status == RunStatus.CREATED:
+                    return TaskCreationResult(
+                        status=RunStatus.CREATED,
+                        run_id=existing_run.run_id,
+                        correlation_id=cid,
+                        applied_rule_ids=[r.get("rule_id") for r in existing_run.applied_rules_snapshot if isinstance(r, dict) and "rule_id" in r],
+                        odoo_task_id=existing_run.odoo_task_id,
+                        odoo_task_url=existing_run.odoo_task_url,
+                        task_name=existing_run.result_payload.get("task_name", title.strip()),
+                        message="Idempotency match: Task was already created previously. Returned cached execution result."
+                    )
+
+                if existing_run.status == RunStatus.FAILED:
+                    return TaskCreationResult(
+                        status=RunStatus.FAILED,
+                        run_id=existing_run.run_id,
+                        correlation_id=cid,
+                        error_code=existing_run.error_code or "execution_failed",
+                        message=existing_run.error_detail or "Prior execution attempt failed."
+                    )
+
+        # 3. Retrieve active rules and validate task readiness
+        active_rules = self.repo.get_active_rules(client_id=ctx.company_id)
+        validation = self.validator.validate_task_creation(
+            title=title,
+            description=description,
+            definition_of_done=definition_of_done,
+            active_rules=active_rules,
+            project_id=target_project_id
+        )
+
+        run_id = existing_run.run_id if existing_run else f"run_{uuid.uuid4().hex}"
         applied_rules_snapshot = [
             {
                 "rule_id": r.rule_id,
@@ -360,8 +505,9 @@ class HostedProcessMemoryService:
             }
             for r in validation.applied_rules
         ]
+        conn_snapshot = sanitize_evidence(connection_identity)
 
-        # 4. If Blocked / Missing DoD -> Return needs_clarification with 0 Odoo calls
+        # 4. If Blocked -> Record validation blocked with needs_clarification
         if not validation.is_valid or validation.status == RunStatus.NEEDS_CLARIFICATION:
             run_record = ExecutionRunRecord(
                 run_id=run_id,
@@ -371,34 +517,35 @@ class HostedProcessMemoryService:
                 action_scope=action_scope,
                 adapter_kind="odoo17_xmlrpc",
                 status=RunStatus.NEEDS_CLARIFICATION,
-                redacted_input_hash=input_hash,
+                redacted_input_hash=input_hash_v2,
+                hash_algorithm_version="v2",
+                connection_snapshot=conn_snapshot,
                 applied_rules_snapshot=applied_rules_snapshot,
+                error_code="validation_blocked",
                 error_detail=validation.message,
                 created_at=self._now()
             )
-            self.repo.create_execution_run(run_record)
-
-            self.repo.add_execution_event(
-                ExecutionEventRecord(
-                    event_id=f"eev_{uuid.uuid4().hex}",
-                    run_id=run_id,
-                    event_type=ExecutionEventType.VALIDATION_FAILED,
-                    details={"missing_fields": validation.missing_fields, "reason": validation.message},
-                    created_at=self._now()
-                )
+            event = ExecutionEventRecord(
+                event_id=f"eev_{uuid.uuid4().hex}",
+                run_id=run_id,
+                event_type=ExecutionEventType.VALIDATION_BLOCKED,
+                details=sanitize_evidence({"missing_fields": validation.missing_fields, "reason": validation.message}),
+                created_at=self._now()
             )
-
+            self.repo.record_validation_blocked(run_record, event)
             return TaskCreationResult(
                 status=RunStatus.NEEDS_CLARIFICATION,
                 run_id=run_id,
                 correlation_id=cid,
                 applied_rule_ids=validation.applied_rule_ids,
                 missing_information=validation.missing_fields,
+                error_code="validation_blocked",
                 message=validation.message
             )
 
-        # 5. Atomically reserve run record with status RUN_STARTED before executing write
-        pending_record = ExecutionRunRecord(
+        # 5. Atomic Claim Run with unique execution_token
+        execution_token = f"tok_{uuid.uuid4().hex}"
+        claim_record = ExecutionRunRecord(
             run_id=run_id,
             company_id=ctx.company_id,
             user_id=ctx.user_id,
@@ -406,105 +553,253 @@ class HostedProcessMemoryService:
             action_scope=action_scope,
             adapter_kind="odoo17_xmlrpc",
             status=RunStatus.RUN_STARTED,
-            redacted_input_hash=input_hash,
+            redacted_input_hash=input_hash_v2,
+            hash_algorithm_version="v2",
+            connection_snapshot=conn_snapshot,
+            execution_token=execution_token,
             applied_rules_snapshot=applied_rules_snapshot,
             created_at=self._now()
         )
-        self.repo.create_execution_run(pending_record)
+        start_event = ExecutionEventRecord(
+            event_id=f"eev_{uuid.uuid4().hex}",
+            run_id=run_id,
+            event_type=ExecutionEventType.EXECUTION_STARTED,
+            details=sanitize_evidence({"action": "create_project_task", "project_id": target_project_id}),
+            created_at=self._now()
+        )
 
-        # 6. Execute Managed Task Creation in Odoo with Read-Back
+        claimed, active_run = self.repo.claim_execution_run(claim_record, start_event)
+        if not claimed:
+            if active_run.status == RunStatus.RUN_STARTED:
+                return TaskCreationResult(
+                    status=RunStatus.RUN_STARTED,
+                    run_id=active_run.run_id,
+                    correlation_id=cid,
+                    error_code="run_in_progress",
+                    message="Task creation is already in progress for this correlation ID."
+                )
+            if active_run.redacted_input_hash != input_hash_v2:
+                return TaskCreationResult(
+                    status=RunStatus.FAILED,
+                    run_id=active_run.run_id,
+                    correlation_id=cid,
+                    error_code="idempotency_conflict",
+                    message=f"Correlation ID '{cid}' was already used with different task parameters. Reusing correlation IDs with changed inputs is forbidden."
+                )
+            if active_run.status == RunStatus.CREATED:
+                return TaskCreationResult(
+                    status=RunStatus.CREATED,
+                    run_id=active_run.run_id,
+                    correlation_id=cid,
+                    odoo_task_id=active_run.odoo_task_id,
+                    odoo_task_url=active_run.odoo_task_url,
+                    message="Idempotency match: Task was already created previously. Returned cached execution result."
+                )
+            return TaskCreationResult(
+                status=active_run.status,
+                run_id=active_run.run_id,
+                correlation_id=cid,
+                error_code=active_run.error_code,
+                message=active_run.error_detail or "Prior execution run exists."
+            )
+
+        # 6. Resolve executor and check execution boundary
         try:
             executor = self.resolve_executor_for_company(ctx.company_id)
-            task_record = executor.create_project_task(
-                title=title,
-                description=description,
-                definition_of_done=definition_of_done,
-                project_id=target_project_id
-            )
-
-            odoo_url = f"https://community.odooconcept.com/web#id={task_record.id}&model=project.task&view_type=form"
-
-            run_record = ExecutionRunRecord(
-                run_id=run_id,
-                company_id=ctx.company_id,
-                user_id=ctx.user_id,
-                correlation_id=cid,
-                action_scope=action_scope,
-                adapter_kind="odoo17_xmlrpc",
-                status=RunStatus.CREATED,
-                redacted_input_hash=input_hash,
-                applied_rules_snapshot=applied_rules_snapshot,
-                odoo_task_id=task_record.id,
-                odoo_task_url=odoo_url,
-                result_payload={"task_name": task_record.name, "project_id": task_record.project_id},
+        except Exception as e:
+            fail_event = ExecutionEventRecord(
+                event_id=f"eev_{uuid.uuid4().hex}",
+                run_id=active_run.run_id,
+                event_type=ExecutionEventType.EXECUTION_FAILED,
+                details=sanitize_evidence({"error": str(e)}),
                 created_at=self._now()
             )
-            self.repo.create_execution_run(run_record)
+            self.repo.transition_execution_run(
+                company_id=ctx.company_id,
+                run_id=active_run.run_id,
+                execution_token=execution_token,
+                new_status=RunStatus.FAILED,
+                event=fail_event,
+                error_code="routing_failed",
+                error_detail=str(e)
+            )
+            return TaskCreationResult(
+                status=RunStatus.FAILED,
+                run_id=active_run.run_id,
+                correlation_id=cid,
+                error_code="routing_failed",
+                message=f"Routing failure: {str(e)}"
+            )
 
-            self.repo.add_execution_event(
-                ExecutionEventRecord(
+        is_mock = isinstance(executor, MockTaskExecutor)
+        if not is_mock and not ALLOW_LIVE_ODOO_WRITES:
+            blocked_event = ExecutionEventRecord(
+                event_id=f"eev_{uuid.uuid4().hex}",
+                run_id=active_run.run_id,
+                event_type=ExecutionEventType.EXECUTION_FAILED,
+                details={"reason": "ALLOW_LIVE_ODOO_WRITES is false"},
+                created_at=self._now()
+            )
+            self.repo.transition_execution_run(
+                company_id=ctx.company_id,
+                run_id=active_run.run_id,
+                execution_token=execution_token,
+                new_status=RunStatus.FAILED,
+                event=blocked_event,
+                error_code="live_writes_disabled",
+                error_detail="Live Odoo writes are disabled by policy (ALLOW_LIVE_ODOO_WRITES=false)."
+            )
+            return TaskCreationResult(
+                status=RunStatus.FAILED,
+                run_id=active_run.run_id,
+                correlation_id=cid,
+                error_code="live_writes_disabled",
+                message="Live Odoo writes are disabled by policy (ALLOW_LIVE_ODOO_WRITES=false)."
+            )
+
+        # 7. Execute Phase-Aware Task Creation
+        outcome = executor.create_project_task_phase_aware(
+            title=title,
+            description=description,
+            definition_of_done=definition_of_done,
+            project_id=target_project_id
+        )
+
+        base_url = conn_config.odoo_url if conn_config else (getattr(executor, "url", "http://localhost:8069"))
+        base_url = base_url.rstrip("/")
+
+        # Handle Outcomes
+        if outcome.phase == ExecutionPhase.SUCCESS:
+            task_id = outcome.task_id
+            odoo_url = f"{base_url}/web#id={task_id}&model=project.task&view_type=form"
+            event = ExecutionEventRecord(
+                event_id=f"eev_{uuid.uuid4().hex}",
+                run_id=active_run.run_id,
+                event_type=ExecutionEventType.TASK_CREATED,
+                details=sanitize_evidence({
+                    "odoo_task_id": task_id,
+                    "read_back_verified": True
+                }),
+                created_at=self._now()
+            )
+            try:
+                ok = self.repo.transition_execution_run(
+                    company_id=ctx.company_id,
+                    run_id=active_run.run_id,
+                    execution_token=execution_token,
+                    new_status=RunStatus.CREATED,
+                    event=event,
+                    odoo_task_id=task_id,
+                    odoo_task_url=odoo_url,
+                    result_payload={"task_name": outcome.task_record.name if outcome.task_record else title.strip(), "project_id": target_project_id}
+                )
+                if not ok:
+                    raise RuntimeError("transition_execution_run returned False")
+            except Exception as persist_err:
+                # State persistence failure after Odoo success -> reconciliation_required
+                rec_event = ExecutionEventRecord(
                     event_id=f"eev_{uuid.uuid4().hex}",
-                    run_id=run_id,
-                    event_type=ExecutionEventType.TASK_CREATED,
-                    details={"odoo_task_id": task_record.id, "read_back_verified": True},
+                    run_id=active_run.run_id,
+                    event_type=ExecutionEventType.RECONCILIATION_REQUIRED,
+                    details=sanitize_evidence({
+                        "reason": "persistence_failure_after_success",
+                        "odoo_task_id": task_id,
+                        "error": str(persist_err)
+                    }),
                     created_at=self._now()
                 )
-            )
+                self.repo.transition_execution_run(
+                    company_id=ctx.company_id,
+                    run_id=active_run.run_id,
+                    execution_token=execution_token,
+                    new_status=RunStatus.RECONCILIATION_REQUIRED,
+                    event=rec_event,
+                    odoo_task_id=task_id,
+                    odoo_task_url=odoo_url,
+                    error_code="persistence_failure",
+                    error_detail=f"Task #{task_id} created in Odoo but state persistence failed: {str(persist_err)}"
+                )
+                return TaskCreationResult(
+                    status=RunStatus.RECONCILIATION_REQUIRED,
+                    run_id=active_run.run_id,
+                    correlation_id=cid,
+                    odoo_task_id=task_id,
+                    odoo_task_url=odoo_url,
+                    error_code="reconciliation_required",
+                    message=f"Task #{task_id} was created in Odoo but state persistence failed. Reconciliation required."
+                )
 
             return TaskCreationResult(
                 status=RunStatus.CREATED,
-                run_id=run_id,
+                run_id=active_run.run_id,
                 correlation_id=cid,
                 applied_rule_ids=validation.applied_rule_ids,
-                missing_information=[],
-                odoo_task_id=task_record.id,
+                odoo_task_id=task_id,
                 odoo_task_url=odoo_url,
-                task_name=task_record.name,
-                message=f"Task #{task_record.id} successfully created and verified in Odoo Project {task_record.project_id}."
+                task_name=outcome.task_record.name if outcome.task_record else title.strip(),
+                message=f"Task #{task_id} successfully created and verified in Odoo Project {target_project_id}."
             )
 
-        except OdooAccessDeniedError as e:
-            run_record = ExecutionRunRecord(
-                run_id=run_id,
-                company_id=ctx.company_id,
-                user_id=ctx.user_id,
-                correlation_id=cid,
-                action_scope=action_scope,
-                adapter_kind="odoo17_xmlrpc",
-                status=RunStatus.FAILED,
-                redacted_input_hash=input_hash,
-                applied_rules_snapshot=applied_rules_snapshot,
-                error_detail=str(e),
+        elif outcome.phase in (ExecutionPhase.UNCERTAIN_CREATE, ExecutionPhase.VERIFICATION_FAILED):
+            odoo_url = f"{base_url}/web#id={outcome.task_id}&model=project.task&view_type=form" if outcome.task_id else None
+            event = ExecutionEventRecord(
+                event_id=f"eev_{uuid.uuid4().hex}",
+                run_id=active_run.run_id,
+                event_type=ExecutionEventType.RECONCILIATION_REQUIRED,
+                details=sanitize_evidence({
+                    "phase": outcome.phase.value,
+                    "error_code": outcome.error_code,
+                    "error_detail": outcome.error_detail,
+                    "odoo_task_id": outcome.task_id
+                }),
                 created_at=self._now()
             )
-            self.repo.create_execution_run(run_record)
+            self.repo.transition_execution_run(
+                company_id=ctx.company_id,
+                run_id=active_run.run_id,
+                execution_token=execution_token,
+                new_status=RunStatus.RECONCILIATION_REQUIRED,
+                event=event,
+                odoo_task_id=outcome.task_id,
+                odoo_task_url=odoo_url,
+                error_code=outcome.error_code or "reconciliation_required",
+                error_detail=outcome.error_detail
+            )
             return TaskCreationResult(
-                status=RunStatus.FAILED,
-                run_id=run_id,
+                status=RunStatus.RECONCILIATION_REQUIRED,
+                run_id=active_run.run_id,
                 correlation_id=cid,
-                message=f"Odoo authorization failure: {str(e)}"
+                odoo_task_id=outcome.task_id,
+                odoo_task_url=odoo_url,
+                error_code=outcome.error_code or "reconciliation_required",
+                message=f"Task execution outcome uncertain ({outcome.phase.value}): {outcome.error_detail}. Manual reconciliation required."
             )
 
-        except (TimeoutError, Exception) as e:
-            is_timeout = isinstance(e, TimeoutError) or "timed out" in str(e).lower()
-            status = RunStatus.RECONCILIATION_REQUIRED if is_timeout else RunStatus.FAILED
-            run_record = ExecutionRunRecord(
-                run_id=run_id,
-                company_id=ctx.company_id,
-                user_id=ctx.user_id,
-                correlation_id=cid,
-                action_scope=action_scope,
-                adapter_kind="odoo17_xmlrpc",
-                status=status,
-                redacted_input_hash=input_hash,
-                applied_rules_snapshot=applied_rules_snapshot,
-                error_detail=str(e),
+        else: # BEFORE_CREATE, CREATE_REJECTED
+            event = ExecutionEventRecord(
+                event_id=f"eev_{uuid.uuid4().hex}",
+                run_id=active_run.run_id,
+                event_type=ExecutionEventType.EXECUTION_FAILED,
+                details=sanitize_evidence({
+                    "phase": outcome.phase.value,
+                    "error_code": outcome.error_code,
+                    "error_detail": outcome.error_detail
+                }),
                 created_at=self._now()
             )
-            self.repo.create_execution_run(run_record)
+            self.repo.transition_execution_run(
+                company_id=ctx.company_id,
+                run_id=active_run.run_id,
+                execution_token=execution_token,
+                new_status=RunStatus.FAILED,
+                event=event,
+                error_code=outcome.error_code or "execution_failed",
+                error_detail=outcome.error_detail
+            )
             return TaskCreationResult(
-                status=status,
-                run_id=run_id,
+                status=RunStatus.FAILED,
+                run_id=active_run.run_id,
                 correlation_id=cid,
-                message=f"Odoo task execution error: {str(e)}"
+                error_code=outcome.error_code or "execution_failed",
+                message=f"Odoo task creation rejected at phase {outcome.phase.value}: {outcome.error_detail}"
             )

@@ -1,17 +1,15 @@
 from typing import Optional, List
 from src.storage.base_repository import BaseRepository
-from src.models.schemas import MemoryPack, MemoryPackRuleItem, ActionContext, CanonicalRule
-from src.models.enums import RuleStatus, EnforcementMode
+from src.models.schemas import MemoryPack, MemoryPackRuleItem, CanonicalRule
+from src.governance.scope_matcher import filter_and_order_rules
 
 class MemoryRetriever:
     """
     Implements compact, scoped memory retrieval ordered by specificity:
     1. Active rules for the authenticated company.
-    2. Exact system + resource + operation matches.
-    3. Matching field-scoped rules (e.g. definition_of_done).
-    4. Resource-wide, application-wide, and company-wide advisory instructions.
-    5. Latest active version only.
-    6. Compact result capped within configured token budget.
+    2. Shared scope matching across system, application, resource, operation, fields.
+    3. Deterministically ordered by specificity score, version, rule_id.
+    4. Compact result capped within configured token budget (oversized rules omitted).
     """
 
     def __init__(self, repo: BaseRepository):
@@ -43,58 +41,26 @@ class MemoryRetriever:
                 message="No active company instructions found for this scope."
             )
 
-        exact_matches: List[CanonicalRule] = []
-        field_matches: List[CanonicalRule] = []
-        advisory_matches: List[CanonicalRule] = []
+        # 2. Filter and order using deterministic scope matcher
+        ordered_rules = filter_and_order_rules(
+            rules=all_rules,
+            system=system,
+            application=application,
+            resource=resource,
+            operation=operation,
+            fields=fields
+        )
 
-        for rule in all_rules:
-            scope = rule.structured_scope
-            if not scope:
-                # General company-wide rule
-                advisory_matches.append(rule)
-                continue
-
-            # System check
-            if scope.system and scope.system.lower() != system.lower():
-                continue
-
-            is_exact = True
-            if application and scope.application and scope.application.lower() != application.lower():
-                is_exact = False
-            if resource and scope.resource and scope.resource.lower() != resource.lower():
-                is_exact = False
-            if operation and scope.operation and scope.operation.lower() != operation.lower():
-                is_exact = False
-
-            if is_exact and (scope.resource or scope.operation):
-                # Check field overlap
-                if scope.fields and fields:
-                    if any(f.lower() in [sf.lower() for sf in scope.fields] for f in fields):
-                        field_matches.append(rule)
-                    else:
-                        exact_matches.append(rule)
-                else:
-                    exact_matches.append(rule)
-            else:
-                advisory_matches.append(rule)
-
-        # Prioritized sequence: exact -> field -> advisory
-        selected_rules = exact_matches + field_matches + advisory_matches
-        
-        # Deduplicate while preserving order and latest version
-        seen_rule_ids = set()
         final_rule_items: List[MemoryPackRuleItem] = []
         approx_tokens = 0
+        omitted_count = 0
 
-        for r in selected_rules:
-            if r.rule_id in seen_rule_ids:
-                continue
-            seen_rule_ids.add(r.rule_id)
-
-            # Estimate token weight (~ 1 token per 4 characters)
+        for r in ordered_rules:
             rule_tokens = len(r.rule_text) // 4 + 20
-            if approx_tokens + rule_tokens > token_budget and len(final_rule_items) > 0:
-                break
+            # Strict token budget: do NOT include oversized rules, even if first rule
+            if approx_tokens + rule_tokens > token_budget:
+                omitted_count += 1
+                continue
 
             approx_tokens += rule_tokens
             final_rule_items.append(
@@ -109,6 +75,13 @@ class MemoryRetriever:
                 )
             )
 
+        if not final_rule_items and omitted_count == 0:
+            msg = "No active company instructions found for this scope."
+        elif omitted_count > 0:
+            msg = f"Retrieved {len(final_rule_items)} scoped company instructions ({omitted_count} omitted due to context budget)."
+        else:
+            msg = f"Retrieved {len(final_rule_items)} scoped company instructions."
+
         return MemoryPack(
             company_slug=company_slug,
             system=system,
@@ -117,5 +90,6 @@ class MemoryRetriever:
             operation=operation,
             rules=final_rule_items,
             token_budget_used=approx_tokens,
-            message=f"Retrieved {len(final_rule_items)} scoped company instructions."
+            message=msg
         )
+

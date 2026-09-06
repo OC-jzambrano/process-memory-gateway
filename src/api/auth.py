@@ -2,7 +2,7 @@ import time
 import json
 import urllib.request
 import logging
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 import jwt
 from jwt.exceptions import PyJWTError, ExpiredSignatureError, InvalidTokenError
 
@@ -13,8 +13,8 @@ from src.config import (
     COGNITO_RESOURCE_SERVER_IDENTIFIER,
     COGNITO_REQUIRED_SCOPE
 )
-from src.models.schemas import RequestContext, Company, User, Membership
-from src.models.enums import RoleType, CompanyStatus, MembershipStatus
+from src.models.schemas import RequestContext
+from src.models.enums import CompanyStatus, MembershipStatus
 from src.storage.base_repository import BaseRepository
 
 logger = logging.getLogger(__name__)

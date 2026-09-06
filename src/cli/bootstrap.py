@@ -1,6 +1,4 @@
 import argparse
-import sys
-import uuid
 from src.storage.repository import MemoryRepository
 from src.models.schemas import Company, User, Membership, OdooConnectionConfig
 from src.models.enums import RoleType, CompanyStatus, MembershipStatus

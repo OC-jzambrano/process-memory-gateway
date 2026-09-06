@@ -85,6 +85,19 @@ class MembershipStatus(str, Enum):
 
 class ExecutionEventType(str, Enum):
     RUN_STARTED = "run_started"
+    EXECUTION_STARTED = "execution_started"
     VALIDATION_FAILED = "validation_failed"
+    VALIDATION_BLOCKED = "validation_blocked"
     TASK_CREATED = "task_created"
+    EXECUTION_FAILED = "execution_failed"
     RECONCILIATION_FLAGGED = "reconciliation_flagged"
+    RECONCILIATION_REQUIRED = "reconciliation_required"
+    RECONCILIATION_RESOLVED = "reconciliation_resolved"
+
+class ExecutionPhase(str, Enum):
+    BEFORE_CREATE = "before_create"
+    CREATE_REJECTED = "create_rejected"
+    UNCERTAIN_CREATE = "uncertain_create"
+    VERIFICATION_FAILED = "verification_failed"
+    SUCCESS = "success"
+

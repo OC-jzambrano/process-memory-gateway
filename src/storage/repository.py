@@ -1,7 +1,8 @@
 import json
 import uuid
+import sqlite3
 from datetime import datetime, timezone
-from typing import List, Optional, Union, Dict, Any
+from typing import List, Optional, Union, Dict, Any, Tuple
 from pathlib import Path
 
 from src.storage.db import db_session, init_db, DEFAULT_DB_PATH
@@ -22,7 +23,16 @@ from src.models.schemas import (
     ActionContext,
     DeterministicConstraint
 )
-from src.models.enums import RuleStatus, DecisionType, EventType, RoleType, RunStatus, MembershipStatus, CompanyStatus
+from src.models.enums import (
+    RuleStatus,
+    DecisionType,
+    EventType,
+    RoleType,
+    RunStatus,
+    MembershipStatus,
+    CompanyStatus,
+    ExecutionEventType
+)
 
 class MemoryRepository(BaseRepository):
     def __init__(self, db_path: Union[str, Path] = DEFAULT_DB_PATH):
@@ -260,17 +270,19 @@ class MemoryRepository(BaseRepository):
             with conn:
                 conn.execute(
                     """
-                    INSERT INTO odoo_connections (connection_id, company_id, secret_arn, odoo_url, odoo_db, default_project_id, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO odoo_connections (connection_id, company_id, secret_arn, odoo_url, odoo_db, default_project_id, status, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(company_id) DO UPDATE SET
                         secret_arn=excluded.secret_arn,
                         odoo_url=excluded.odoo_url,
                         odoo_db=excluded.odoo_db,
-                        default_project_id=excluded.default_project_id
+                        default_project_id=excluded.default_project_id,
+                        status=excluded.status
                     """,
                     (
                         config.connection_id, config.company_id, config.secret_arn,
                         config.odoo_url, config.odoo_db, config.default_project_id,
+                        config.status,
                         config.created_at or now
                     )
                 )
@@ -676,6 +688,47 @@ class MemoryRepository(BaseRepository):
 
         return new_rule
 
+    def create_canonical_rule(self, rule: CanonicalRule) -> CanonicalRule:
+        now = self._now()
+        scope_json = self._serialize_json(rule.structured_scope)
+        constraint_json = self._serialize_json(rule.structured_constraint)
+
+        with db_session(self.db_path) as conn:
+            with conn:
+                conn.execute(
+                    """
+                    INSERT INTO canonical_rules
+                    (rule_id, client_id, process_name, rule_text, rule_type, severity, enforcement_mode, version, status, source_candidate_id, replaced_by_rule_id, structured_scope_json, structured_constraint_json, approved_by, approved_at, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(rule_id) DO UPDATE SET
+                        process_name=excluded.process_name,
+                        rule_text=excluded.rule_text,
+                        rule_type=excluded.rule_type,
+                        severity=excluded.severity,
+                        enforcement_mode=excluded.enforcement_mode,
+                        version=excluded.version,
+                        status=excluded.status,
+                        source_candidate_id=excluded.source_candidate_id,
+                        replaced_by_rule_id=excluded.replaced_by_rule_id,
+                        structured_scope_json=excluded.structured_scope_json,
+                        structured_constraint_json=excluded.structured_constraint_json,
+                        approved_by=excluded.approved_by,
+                        updated_at=?
+                    """,
+                    (
+                        rule.rule_id, rule.client_id, rule.process_name or "general",
+                        rule.rule_text, rule.rule_type.value if hasattr(rule.rule_type, "value") else rule.rule_type,
+                        rule.severity.value if hasattr(rule.severity, "value") else rule.severity,
+                        rule.enforcement_mode.value if hasattr(rule.enforcement_mode, "value") else rule.enforcement_mode,
+                        rule.version, rule.status.value if hasattr(rule.status, "value") else rule.status,
+                        rule.source_candidate_id, rule.replaced_by_rule_id,
+                        scope_json, constraint_json, rule.approved_by,
+                        rule.approved_at or now, rule.created_at or now, rule.updated_at or now,
+                        now
+                    )
+                )
+        return rule
+
     def get_rule(self, rule_id: str, client_id: Optional[str] = None) -> Optional[CanonicalRule]:
         with db_session(self.db_path) as conn:
             cursor = conn.cursor()
@@ -756,31 +809,286 @@ class MemoryRepository(BaseRepository):
         scope_json = self._serialize_json(run.action_scope)
         rules_json = self._serialize_json(run.applied_rules_snapshot)
         payload_json = self._serialize_json(run.result_payload)
+        conn_json = self._serialize_json(run.connection_snapshot)
 
         with db_session(self.db_path) as conn:
             with conn:
                 conn.execute(
                     """
                     INSERT INTO execution_runs
-                    (run_id, company_id, user_id, correlation_id, action_scope_json, adapter_kind, status, redacted_input_hash, applied_rules_snapshot_json, odoo_task_id, odoo_task_url, result_payload_json, error_detail, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (run_id, company_id, user_id, correlation_id, action_scope_json, adapter_kind, status,
+                     redacted_input_hash, hash_algorithm_version, connection_snapshot_json, execution_token,
+                     applied_rules_snapshot_json, odoo_task_id, odoo_task_url, result_payload_json,
+                     error_code, error_detail, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(company_id, correlation_id) DO UPDATE SET
                         status=excluded.status,
                         redacted_input_hash=excluded.redacted_input_hash,
+                        hash_algorithm_version=excluded.hash_algorithm_version,
+                        connection_snapshot_json=excluded.connection_snapshot_json,
+                        execution_token=excluded.execution_token,
                         odoo_task_id=excluded.odoo_task_id,
                         odoo_task_url=excluded.odoo_task_url,
                         result_payload_json=excluded.result_payload_json,
                         applied_rules_snapshot_json=excluded.applied_rules_snapshot_json,
+                        error_code=excluded.error_code,
                         error_detail=excluded.error_detail
                     """,
                     (
                         run.run_id, run.company_id, run.user_id, run.correlation_id,
                         scope_json, run.adapter_kind, run.status.value if isinstance(run.status, RunStatus) else run.status,
-                        run.redacted_input_hash, rules_json, run.odoo_task_id, run.odoo_task_url,
-                        payload_json, run.error_detail, run.created_at or now
+                        run.redacted_input_hash, run.hash_algorithm_version, conn_json, run.execution_token,
+                        rules_json, run.odoo_task_id, run.odoo_task_url,
+                        payload_json, run.error_code, run.error_detail, run.created_at or now
                     )
                 )
         return run
+
+    def claim_execution_run(self, run: ExecutionRunRecord, event: ExecutionEventRecord) -> Tuple[bool, ExecutionRunRecord]:
+        now = self._now()
+        scope_json = self._serialize_json(run.action_scope)
+        rules_json = self._serialize_json(run.applied_rules_snapshot)
+        payload_json = self._serialize_json(run.result_payload)
+        conn_json = self._serialize_json(run.connection_snapshot)
+        details_json = self._serialize_json(event.details)
+
+        with db_session(self.db_path) as conn:
+            with conn:
+                try:
+                    conn.execute(
+                        """
+                        INSERT INTO execution_runs
+                        (run_id, company_id, user_id, correlation_id, action_scope_json, adapter_kind, status,
+                         redacted_input_hash, hash_algorithm_version, connection_snapshot_json, execution_token,
+                         applied_rules_snapshot_json, odoo_task_id, odoo_task_url, result_payload_json,
+                         error_code, error_detail, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            run.run_id, run.company_id, run.user_id, run.correlation_id,
+                            scope_json, run.adapter_kind, RunStatus.RUN_STARTED.value,
+                            run.redacted_input_hash, run.hash_algorithm_version, conn_json, run.execution_token,
+                            rules_json, run.odoo_task_id, run.odoo_task_url, payload_json,
+                            run.error_code, run.error_detail, run.created_at or now
+                        )
+                    )
+                    conn.execute(
+                        """
+                        INSERT INTO execution_events (event_id, run_id, event_type, details_json, created_at)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (event.event_id, run.run_id, event.event_type.value, details_json, event.created_at or now)
+                    )
+                    return True, run
+                except sqlite3.IntegrityError:
+                    existing_row = conn.execute(
+                        "SELECT * FROM execution_runs WHERE company_id = ? AND correlation_id = ?",
+                        (run.company_id, run.correlation_id)
+                    ).fetchone()
+                    if not existing_row:
+                        raise
+                    existing_run = self._parse_run_row(dict(existing_row))
+
+                    if existing_run.status == RunStatus.NEEDS_CLARIFICATION:
+                        cur = conn.execute(
+                            """
+                            UPDATE execution_runs
+                            SET status = 'run_started',
+                                execution_token = ?,
+                                redacted_input_hash = ?,
+                                hash_algorithm_version = ?,
+                                connection_snapshot_json = ?,
+                                action_scope_json = ?,
+                                adapter_kind = ?,
+                                applied_rules_snapshot_json = ?,
+                                result_payload_json = ?,
+                                error_code = NULL,
+                                error_detail = NULL,
+                                odoo_task_id = NULL,
+                                odoo_task_url = NULL
+                            WHERE company_id = ? AND correlation_id = ? AND status = 'needs_clarification'
+                            """,
+                            (
+                                run.execution_token, run.redacted_input_hash, run.hash_algorithm_version,
+                                conn_json, scope_json, run.adapter_kind, rules_json, payload_json,
+                                run.company_id, run.correlation_id
+                            )
+                        )
+                        if cur.rowcount == 1:
+                            conn.execute(
+                                """
+                                INSERT INTO execution_events (event_id, run_id, event_type, details_json, created_at)
+                                VALUES (?, ?, ?, ?, ?)
+                                """,
+                                (event.event_id, existing_run.run_id, event.event_type.value, details_json, event.created_at or now)
+                            )
+                            updated_run = self.get_execution_run_by_correlation(run.company_id, run.correlation_id)
+                            return True, updated_run or run
+
+                    return False, existing_run
+
+    def record_validation_blocked(self, run: ExecutionRunRecord, event: ExecutionEventRecord) -> ExecutionRunRecord:
+        now = self._now()
+        scope_json = self._serialize_json(run.action_scope)
+        rules_json = self._serialize_json(run.applied_rules_snapshot)
+        payload_json = self._serialize_json(run.result_payload)
+        conn_json = self._serialize_json(run.connection_snapshot)
+        details_json = self._serialize_json(event.details)
+
+        with db_session(self.db_path) as conn:
+            with conn:
+                try:
+                    conn.execute(
+                        """
+                        INSERT INTO execution_runs
+                        (run_id, company_id, user_id, correlation_id, action_scope_json, adapter_kind, status,
+                         redacted_input_hash, hash_algorithm_version, connection_snapshot_json, execution_token,
+                         applied_rules_snapshot_json, odoo_task_id, odoo_task_url, result_payload_json,
+                         error_code, error_detail, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            run.run_id, run.company_id, run.user_id, run.correlation_id,
+                            scope_json, run.adapter_kind, RunStatus.NEEDS_CLARIFICATION.value,
+                            run.redacted_input_hash, run.hash_algorithm_version, conn_json, run.execution_token,
+                            rules_json, run.odoo_task_id, run.odoo_task_url, payload_json,
+                            run.error_code, run.error_detail, run.created_at or now
+                        )
+                    )
+                    conn.execute(
+                        """
+                        INSERT INTO execution_events (event_id, run_id, event_type, details_json, created_at)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (event.event_id, run.run_id, event.event_type.value, details_json, event.created_at or now)
+                    )
+                    return run
+                except sqlite3.IntegrityError:
+                    cur = conn.execute(
+                        """
+                        UPDATE execution_runs
+                        SET redacted_input_hash = ?,
+                            hash_algorithm_version = ?,
+                            connection_snapshot_json = ?,
+                            action_scope_json = ?,
+                            applied_rules_snapshot_json = ?,
+                            result_payload_json = ?,
+                            error_code = ?,
+                            error_detail = ?
+                        WHERE company_id = ? AND correlation_id = ? AND status = 'needs_clarification'
+                        """,
+                        (
+                            run.redacted_input_hash, run.hash_algorithm_version, conn_json,
+                            scope_json, rules_json, payload_json, run.error_code, run.error_detail,
+                            run.company_id, run.correlation_id
+                        )
+                    )
+                    existing_row = conn.execute(
+                        "SELECT * FROM execution_runs WHERE company_id = ? AND correlation_id = ?",
+                        (run.company_id, run.correlation_id)
+                    ).fetchone()
+                    existing_run = self._parse_run_row(dict(existing_row))
+                    if cur.rowcount > 0:
+                        conn.execute(
+                            """
+                            INSERT INTO execution_events (event_id, run_id, event_type, details_json, created_at)
+                            VALUES (?, ?, ?, ?, ?)
+                            """,
+                            (event.event_id, existing_run.run_id, event.event_type.value, details_json, event.created_at or now)
+                        )
+                    return existing_run
+
+    def transition_execution_run(
+        self,
+        company_id: str,
+        run_id: str,
+        execution_token: str,
+        new_status: RunStatus,
+        event: ExecutionEventRecord,
+        odoo_task_id: Optional[int] = None,
+        odoo_task_url: Optional[str] = None,
+        result_payload: Optional[Dict[str, Any]] = None,
+        error_code: Optional[str] = None,
+        error_detail: Optional[str] = None
+    ) -> bool:
+        now = self._now()
+        payload_json = self._serialize_json(result_payload) if result_payload is not None else None
+        details_json = self._serialize_json(event.details)
+
+        with db_session(self.db_path) as conn:
+            with conn:
+                query = """
+                    UPDATE execution_runs
+                    SET status = ?,
+                        error_code = ?,
+                        error_detail = ?
+                """
+                params: List[Any] = [
+                    new_status.value if isinstance(new_status, RunStatus) else new_status,
+                    error_code,
+                    error_detail
+                ]
+                if odoo_task_id is not None:
+                    query += ", odoo_task_id = ?"
+                    params.append(odoo_task_id)
+                if odoo_task_url is not None:
+                    query += ", odoo_task_url = ?"
+                    params.append(odoo_task_url)
+                if payload_json is not None:
+                    query += ", result_payload_json = ?"
+                    params.append(payload_json)
+
+                query += " WHERE company_id = ? AND run_id = ? AND execution_token = ?"
+                params.extend([company_id, run_id, execution_token])
+
+                cur = conn.execute(query, params)
+                if cur.rowcount == 1:
+                    conn.execute(
+                        """
+                        INSERT INTO execution_events (event_id, run_id, event_type, details_json, created_at)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (event.event_id, run_id, event.event_type.value, details_json, event.created_at or now)
+                    )
+                    return True
+                return False
+
+    def reconcile_abandoned_runs(self) -> int:
+        now = self._now()
+        with db_session(self.db_path) as conn:
+            with conn:
+                cursor = conn.cursor()
+                abandoned = cursor.execute(
+                    "SELECT run_id, company_id FROM execution_runs WHERE status = 'run_started'"
+                ).fetchall()
+                count = 0
+                for row in abandoned:
+                    run_id = row["run_id"]
+                    cursor.execute(
+                        """
+                        UPDATE execution_runs
+                        SET status = 'reconciliation_required',
+                            error_code = 'abandoned_run',
+                            error_detail = 'Run was left in run_started state and reconciled on startup'
+                        WHERE run_id = ? AND status = 'run_started'
+                        """,
+                        (run_id,)
+                    )
+                    if cursor.rowcount > 0:
+                        count += 1
+                        event_id = f"evt_{uuid.uuid4().hex[:12]}"
+                        details_json = json.dumps({
+                            "reason": "startup_reconciliation",
+                            "message": "Run was left in run_started state and reconciled on startup"
+                        })
+                        cursor.execute(
+                            """
+                            INSERT INTO execution_events (event_id, run_id, event_type, details_json, created_at)
+                            VALUES (?, ?, ?, ?, ?)
+                            """,
+                            (event_id, run_id, ExecutionEventType.RECONCILIATION_REQUIRED.value, details_json, now)
+                        )
+                return count
 
     def get_execution_run(self, run_id: str, company_id: Optional[str] = None) -> Optional[ExecutionRunRecord]:
         with db_session(self.db_path) as conn:
@@ -838,11 +1146,38 @@ class MemoryRepository(BaseRepository):
                 )
         return event
 
+    def list_execution_events(self, company_id: str, run_id: str) -> List[ExecutionEventRecord]:
+        with db_session(self.db_path) as conn:
+            cursor = conn.cursor()
+            rows = cursor.execute(
+                """
+                SELECT e.* FROM execution_events e
+                JOIN execution_runs r ON e.run_id = r.run_id
+                WHERE r.company_id = ? AND e.run_id = ?
+                ORDER BY e.created_at ASC
+                """,
+                (company_id, run_id)
+            ).fetchall()
+            results = []
+            for r in rows:
+                d = dict(r)
+                details = json.loads(d["details_json"]) if d.get("details_json") else {}
+                evt_type = ExecutionEventType(d["event_type"]) if d["event_type"] in [t.value for t in ExecutionEventType] else ExecutionEventType.RUN_STARTED
+                results.append(ExecutionEventRecord(
+                    event_id=d["event_id"],
+                    run_id=d["run_id"],
+                    event_type=evt_type,
+                    details=details,
+                    created_at=d.get("created_at")
+                ))
+            return results
+
     def _parse_run_row(self, d: Dict[str, Any]) -> ExecutionRunRecord:
         scope = self._deserialize_scope(d.get("action_scope_json")) or ActionContext()
         rules = json.loads(d["applied_rules_snapshot_json"]) if d.get("applied_rules_snapshot_json") else []
         payload = json.loads(d["result_payload_json"]) if d.get("result_payload_json") else {}
         status = RunStatus(d["status"]) if d["status"] in [s.value for s in RunStatus] else RunStatus.CREATED
+        conn_snapshot = json.loads(d["connection_snapshot_json"]) if d.get("connection_snapshot_json") else None
 
         return ExecutionRunRecord(
             run_id=d["run_id"],
@@ -853,10 +1188,14 @@ class MemoryRepository(BaseRepository):
             adapter_kind=d.get("adapter_kind", "odoo17_xmlrpc"),
             status=status,
             redacted_input_hash=d.get("redacted_input_hash"),
+            hash_algorithm_version=d.get("hash_algorithm_version") or "v2",
+            connection_snapshot=conn_snapshot,
+            execution_token=d.get("execution_token"),
             applied_rules_snapshot=rules,
             odoo_task_id=d.get("odoo_task_id"),
             odoo_task_url=d.get("odoo_task_url"),
             result_payload=payload,
+            error_code=d.get("error_code"),
             error_detail=d.get("error_detail"),
             created_at=d.get("created_at")
         )

@@ -1,7 +1,8 @@
-from typing import Optional, List, Dict, Any
+from typing import Optional, List
 from pydantic import BaseModel, Field
-from src.models.schemas import CanonicalRule, DeterministicConstraint, ActionContext
-from src.models.enums import RunStatus, ConstraintKind, EnforcementMode
+from src.models.schemas import CanonicalRule
+from src.models.enums import RunStatus, ConstraintKind
+from src.governance.scope_matcher import filter_and_order_rules
 
 class TaskValidationResult(BaseModel):
     is_valid: bool
@@ -21,6 +22,7 @@ class TaskValidator:
     3. Only an approved canonical rule with a deterministic constraint activates enforcement.
     4. Unstructured natural language rules remain advisory and cannot block execution.
     5. Returns RunStatus.NEEDS_CLARIFICATION with zero Odoo calls when required data is missing.
+    6. Validates constraints independently of MemoryPack token budget.
     """
 
     def validate_task_creation(
@@ -39,11 +41,22 @@ class TaskValidator:
                 message="Task title is required."
             )
 
+        # Filter applicable rules matching task creation scope
+        applicable_rules = filter_and_order_rules(
+            rules=active_rules,
+            system="odoo",
+            application="project",
+            resource="project.task",
+            operation="create",
+            fields=["definition_of_done"],
+            process_name="project"
+        )
+
         applied_rules: List[CanonicalRule] = []
         applied_rule_ids: List[str] = []
         missing_fields: List[str] = []
 
-        for rule in active_rules:
+        for rule in applicable_rules:
             constraint = rule.structured_constraint
             if not constraint:
                 # Advisory rule: does not block

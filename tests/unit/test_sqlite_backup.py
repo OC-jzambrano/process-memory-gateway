@@ -1,7 +1,4 @@
-import gzip
 import sqlite3
-import pytest
-from pathlib import Path
 from scripts.backup_sqlite import perform_consistent_backup, compress_file, restore_backup
 from src.storage.db import init_db
 

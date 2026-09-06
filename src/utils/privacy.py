@@ -1,5 +1,5 @@
 import re
-from typing import Tuple
+from typing import Tuple, Any, Optional, Set, Dict, List
 
 # Common regex patterns for PII and sensitive data
 EMAIL_PATTERN = re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b')
@@ -37,3 +37,61 @@ def redact_sensitive_text(text: str) -> Tuple[str, int]:
     redacted = API_KEY_PATTERN.sub(_replace_key, redacted)
 
     return redacted, redactions
+
+
+SENSITIVE_KEY_PATTERNS = {
+    "password",
+    "secret",
+    "token",
+    "api_key",
+    "apikey",
+    "secret_arn",
+    "credential",
+    "private_key",
+    "access_key",
+    "authorization"
+}
+
+def sanitize_evidence(data: Any, known_secrets: Optional[Set[str]] = None) -> Any:
+    """
+    Recursively sanitizes evidence data prior to persistence or logging.
+    - Replaces values for keys matching sensitive words (password, api_key, secret, etc.)
+    - Replaces occurrences of known secrets in strings
+    - Redacts regex patterns (emails, credit cards, api keys)
+    """
+    if data is None:
+        return None
+
+    # Handle Pydantic models
+    if hasattr(data, "model_dump"):
+        data = data.model_dump()
+    elif hasattr(data, "dict"):
+        data = data.dict()
+
+    if isinstance(data, dict):
+        sanitized = {}
+        for k, v in data.items():
+            k_lower = str(k).lower()
+            if any(p in k_lower for p in SENSITIVE_KEY_PATTERNS):
+                sanitized[k] = "[REDACTED_SECRET]"
+            else:
+                sanitized[k] = sanitize_evidence(v, known_secrets=known_secrets)
+        return sanitized
+
+    if isinstance(data, (list, tuple)):
+        return [sanitize_evidence(item, known_secrets=known_secrets) for item in data]
+
+    if isinstance(data, set):
+        return {sanitize_evidence(item, known_secrets=known_secrets) for item in data}
+
+    if isinstance(data, str):
+        text = data
+        if known_secrets:
+            # Sort known secrets by length descending to match longest substrings first
+            valid_secrets = sorted([s for s in known_secrets if s and len(s) >= 2], key=len, reverse=True)
+            for s in valid_secrets:
+                text = text.replace(s, "[REDACTED_KNOWN_SECRET]")
+        redacted, _ = redact_sensitive_text(text)
+        return redacted
+
+    return data

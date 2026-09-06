@@ -1,19 +1,14 @@
-import os
-import json
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from src.config import (
     DATA_DIR,
-    HOSTED_MODE,
     COGNITO_USER_POOL_ID,
     COGNITO_REGION,
-    COGNITO_APP_CLIENT_ID,
-    COGNITO_RESOURCE_SERVER_IDENTIFIER,
     COGNITO_REQUIRED_SCOPE,
     COGNITO_DOMAIN,
     DOMAIN_NAME
@@ -21,8 +16,7 @@ from src.config import (
 from src.storage.db import get_connection
 from src.storage.repository import MemoryRepository
 from src.api.auth import CognitoTokenVerifier, resolve_authenticated_context, AuthenticationError, AuthorizationError
-from src.api.auth_context import set_current_context, RequestContext
-from src.models.enums import RoleType
+from src.api.auth_context import set_current_context
 from server import mcp
 
 logger = logging.getLogger(__name__)

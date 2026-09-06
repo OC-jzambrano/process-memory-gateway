@@ -8,7 +8,6 @@ in-memory protocol sessions in:
 This module provides fast supplementary unit-level verification on Python callables.
 """
 import inspect
-import pytest
 import server
 from server import (
     remember_company_instruction,

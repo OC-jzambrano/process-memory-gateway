@@ -1,10 +1,9 @@
-import json
 from src.storage.repository import MemoryRepository
 from src.api.service import HostedProcessMemoryService
 from src.integrations.mock_executor import MockTaskExecutor
 from src.api.auth_context import set_current_context
 from src.models.schemas import RequestContext, Company, User, Membership
-from src.models.enums import RoleType, RunStatus, CompanyStatus, MembershipStatus
+from src.models.enums import RoleType, CompanyStatus, MembershipStatus
 
 def run_pilot_demo():
     print("=" * 80)
@@ -68,7 +67,7 @@ def run_pilot_demo():
     print("\n[STEP 5] Owner Approves Candidate via Agent Chat:")
     review_res = service.review_memory_candidate(candidate_id=cand_id, decision="approve")
     print(f"  Review Decision: {review_res.decision.value} -> Rule #{review_res.rule_id} (v{review_res.version})")
-    print(f"  Rule is now CANONICAL and ACTIVE for pilot_company.")
+    print("  Rule is now CANONICAL and ACTIVE for pilot_company.")
 
     # Turn 6: New chat attempts task creation without DoD -> BLOCKED
     print("\n[STEP 6] New Agent Session Attempts Task Creation Without DoD:")
@@ -82,7 +81,7 @@ def run_pilot_demo():
     print(f"  Missing Required Fields: {blocked_res.missing_information}")
     print(f"  Applied Rule IDs: {blocked_res.applied_rule_ids}")
     print(f"  Message: {blocked_res.message}")
-    print(f"  Zero Odoo calls made: Confirmed!")
+    print("  Zero Odoo calls made: Confirmed!")
 
     # Turn 7: Correct task by supplying DoD
     print("\n[STEP 7] Supply Definition of Done and Retry with Same Correlation ID:")
@@ -99,7 +98,7 @@ def run_pilot_demo():
     print(f"  Status: ✅ {success_res.status.value.upper()}")
     print(f"  Odoo Task ID: {success_res.odoo_task_id}")
     print(f"  Odoo URL: {success_res.odoo_task_url}")
-    print(f"  Read-Back Verified: True")
+    print("  Read-Back Verified: True")
 
     # Turn 8: Idempotency protection check
     print("\n[STEP 8] Idempotency Protection Test (Reusing Same Correlation ID):")

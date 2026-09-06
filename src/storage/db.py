@@ -2,7 +2,7 @@ import sqlite3
 from pathlib import Path
 from typing import Union
 from contextlib import contextmanager
-from src.config import DEFAULT_DB_PATH
+from src.config import DEFAULT_DB_PATH, SQLITE_BUSY_TIMEOUT_MS
 
 SCHEMA_SQL = """
 PRAGMA foreign_keys = ON;
@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS odoo_connections (
     odoo_url            TEXT NOT NULL DEFAULT 'https://community.odooconcept.com',
     odoo_db             TEXT NOT NULL DEFAULT 'community',
     default_project_id  INTEGER NOT NULL DEFAULT 142,
+    status              TEXT NOT NULL DEFAULT 'active',
     created_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -187,10 +188,14 @@ CREATE TABLE IF NOT EXISTS execution_runs (
     adapter_kind                TEXT NOT NULL DEFAULT 'odoo17_xmlrpc',
     status                      TEXT NOT NULL DEFAULT 'created',
     redacted_input_hash         TEXT,
+    hash_algorithm_version      TEXT DEFAULT 'v2',
+    connection_snapshot_json    TEXT,
+    execution_token             TEXT,
     applied_rules_snapshot_json TEXT,
     odoo_task_id                INTEGER,
     odoo_task_url               TEXT,
     result_payload_json         TEXT,
+    error_code                  TEXT,
     error_detail                TEXT,
     created_at                  TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(company_id, correlation_id)
@@ -222,8 +227,6 @@ BEGIN
     SELECT RAISE(FAIL, 'execution_events audit trail is strictly append-only and cannot be deleted.');
 END;
 """
-
-from src.config import DEFAULT_DB_PATH, SQLITE_BUSY_TIMEOUT_MS
 
 def get_connection(db_path: Union[str, Path] = DEFAULT_DB_PATH) -> sqlite3.Connection:
     """Returns a SQLite connection configured with row factory, foreign keys, WAL mode, and busy timeout."""
@@ -270,6 +273,23 @@ def _migrate_columns_if_needed(conn: sqlite3.Connection) -> None:
         cursor.execute("ALTER TABLE review_events ADD COLUMN edited_scope_json TEXT;")
     if "edited_constraint_json" not in evt_cols and len(evt_cols) > 0:
         cursor.execute("ALTER TABLE review_events ADD COLUMN edited_constraint_json TEXT;")
+
+    # Check odoo_connections columns
+    conn_cols = [r["name"] for r in cursor.execute("PRAGMA table_info(odoo_connections);").fetchall()]
+    if "status" not in conn_cols and len(conn_cols) > 0:
+        cursor.execute("ALTER TABLE odoo_connections ADD COLUMN status TEXT NOT NULL DEFAULT 'active';")
+
+    # Check execution_runs columns
+    run_cols = [r["name"] for r in cursor.execute("PRAGMA table_info(execution_runs);").fetchall()]
+    if "connection_snapshot_json" not in run_cols and len(run_cols) > 0:
+        cursor.execute("ALTER TABLE execution_runs ADD COLUMN connection_snapshot_json TEXT;")
+    if "execution_token" not in run_cols and len(run_cols) > 0:
+        cursor.execute("ALTER TABLE execution_runs ADD COLUMN execution_token TEXT;")
+    if "hash_algorithm_version" not in run_cols and len(run_cols) > 0:
+        cursor.execute("ALTER TABLE execution_runs ADD COLUMN hash_algorithm_version TEXT DEFAULT 'v2';")
+    if "error_code" not in run_cols and len(run_cols) > 0:
+        cursor.execute("ALTER TABLE execution_runs ADD COLUMN error_code TEXT;")
+
 
 def init_db(db_path: Union[str, Path] = DEFAULT_DB_PATH) -> None:
     """Initializes the database schema with constraints, indexes, and immutability triggers."""

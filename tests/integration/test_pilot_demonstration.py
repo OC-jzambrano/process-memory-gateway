@@ -1,11 +1,9 @@
 import pytest
-import uuid
 from src.storage.repository import MemoryRepository
-from src.extractor.service import ProcessMemoryExtractorService
 from src.integrations.mock_executor import MockTaskExecutor
 from src.api.service import HostedProcessMemoryService
 from src.api.auth_context import set_current_context
-from src.models.schemas import RequestContext, Company, User, Membership, ActionContext, DeterministicConstraint
+from src.models.schemas import RequestContext, Company, User, Membership
 from src.models.enums import RoleType, RunStatus, ConstraintKind, CompanyStatus, MembershipStatus
 
 @pytest.fixture

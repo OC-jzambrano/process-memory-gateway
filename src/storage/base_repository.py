@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Optional, List, Union
+from typing import Optional, List, Union, Tuple, Dict, Any
 from src.models.schemas import (
     Company,
     User,
@@ -14,7 +14,7 @@ from src.models.schemas import (
     ActionContext,
     DeterministicConstraint
 )
-from src.models.enums import RuleStatus, DecisionType
+from src.models.enums import RuleStatus, DecisionType, RunStatus
 
 class BaseRepository(ABC):
     """
@@ -85,6 +85,9 @@ class BaseRepository(ABC):
     ) -> List[CanonicalRule]: ...
 
     @abstractmethod
+    def create_canonical_rule(self, rule: CanonicalRule) -> CanonicalRule: ...
+
+    @abstractmethod
     def get_rule(self, rule_id: str, client_id: Optional[str] = None) -> Optional[CanonicalRule]: ...
 
     @abstractmethod
@@ -114,6 +117,30 @@ class BaseRepository(ABC):
     def create_execution_run(self, run: ExecutionRunRecord) -> ExecutionRunRecord: ...
 
     @abstractmethod
+    def claim_execution_run(self, run: ExecutionRunRecord, event: ExecutionEventRecord) -> Tuple[bool, ExecutionRunRecord]: ...
+
+    @abstractmethod
+    def record_validation_blocked(self, run: ExecutionRunRecord, event: ExecutionEventRecord) -> ExecutionRunRecord: ...
+
+    @abstractmethod
+    def transition_execution_run(
+        self,
+        company_id: str,
+        run_id: str,
+        execution_token: str,
+        new_status: RunStatus,
+        event: ExecutionEventRecord,
+        odoo_task_id: Optional[int] = None,
+        odoo_task_url: Optional[str] = None,
+        result_payload: Optional[Dict[str, Any]] = None,
+        error_code: Optional[str] = None,
+        error_detail: Optional[str] = None
+    ) -> bool: ...
+
+    @abstractmethod
+    def reconcile_abandoned_runs(self) -> int: ...
+
+    @abstractmethod
     def get_execution_run(self, run_id: str, company_id: Optional[str] = None) -> Optional[ExecutionRunRecord]: ...
 
     @abstractmethod
@@ -126,4 +153,8 @@ class BaseRepository(ABC):
     def add_execution_event(self, event: ExecutionEventRecord) -> ExecutionEventRecord: ...
 
     @abstractmethod
+    def list_execution_events(self, company_id: str, run_id: str) -> List[ExecutionEventRecord]: ...
+
+    @abstractmethod
     def list_review_events(self, client_id: str, limit: int = 50) -> List[ReviewEvent]: ...
+

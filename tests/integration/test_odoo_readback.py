@@ -1,7 +1,6 @@
 import pytest
 from src.integrations.mock_executor import MockTaskExecutor
-from src.integrations.odoo17_xmlrpc import Odoo17XmlRpcExecutor, OdooAccessDeniedError, OdooExecutionError
-from src.models.schemas import TaskRecord
+from src.integrations.odoo17_xmlrpc import Odoo17XmlRpcExecutor, OdooAccessDeniedError
 
 def test_safe_html_escapes_scripts_and_tags():
     """Executor must strictly escape user-provided script tags and HTML injection."""

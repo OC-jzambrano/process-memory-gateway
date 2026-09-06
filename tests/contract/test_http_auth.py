@@ -1,15 +1,13 @@
 import time
-import json
 import pytest
 import jwt
 from starlette.testclient import TestClient
 from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.hazmat.primitives import serialization
 
 from src.storage.repository import MemoryRepository
 from src.models.schemas import Company, User, Membership
 from src.models.enums import RoleType, CompanyStatus, MembershipStatus
-from src.api.http_app import app, token_verifier, repo
+from src.api.http_app import app, token_verifier
 
 @pytest.fixture(scope="module")
 def rsa_keypair():
@@ -159,8 +157,9 @@ def test_oauth_discovery_metadata(auth_setup):
 def test_request_missing_token_returns_401(auth_setup):
     client = auth_setup["client"]
     res = client.post("/companies/company_a/mcp", json={})
-    # Non-hosted dev fallback permits when headers missing or returns 401 in hosted mode
-    # Test explicitly passing empty Authorization
+    assert res.status_code == 401
+    assert res.json()["error"] == "unauthorized"
+    # An empty Bearer token must also be rejected.
     res_auth = client.post("/companies/company_a/mcp", headers={"Authorization": "Bearer "}, json={})
     assert res_auth.status_code == 401
     assert res_auth.json()["error"] == "unauthorized"
@@ -312,4 +311,3 @@ def test_health_ready_probe_503_does_not_leak_paths(auth_setup, monkeypatch):
     assert "nonexistent" not in res_text
     assert "private" not in res_text
     assert "sqlite" not in res_text
-

@@ -1,10 +1,12 @@
 import contextvars
 from typing import Optional, List
 from src.config import HOSTED_MODE
-from src.models.schemas import RequestContext, Company, User, Membership
+from src.models.schemas import RequestContext
 from src.models.enums import RoleType, MembershipStatus, CompanyStatus
 from src.storage.base_repository import BaseRepository
 from src.api.auth import AuthenticationError, AuthorizationError
+
+from contextlib import contextmanager
 
 # ContextVar storing the current authenticated request context for thread/async safety
 _current_request_context: contextvars.ContextVar[Optional[RequestContext]] = contextvars.ContextVar(
@@ -14,6 +16,15 @@ _current_request_context: contextvars.ContextVar[Optional[RequestContext]] = con
 
 def set_current_context(ctx: Optional[RequestContext]) -> None:
     _current_request_context.set(ctx)
+
+@contextmanager
+def request_context(ctx: Optional[RequestContext]):
+    """Context manager for scoping execution to a specific authenticated RequestContext."""
+    token = _current_request_context.set(ctx)
+    try:
+        yield ctx
+    finally:
+        _current_request_context.reset(token)
 
 def get_current_context() -> RequestContext:
     ctx = _current_request_context.get()

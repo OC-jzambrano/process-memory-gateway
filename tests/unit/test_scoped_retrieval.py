@@ -1,7 +1,7 @@
 import pytest
 from src.storage.repository import MemoryRepository
 from src.governance.memory_retriever import MemoryRetriever
-from src.models.schemas import CanonicalRule, ActionContext, Company
+from src.models.schemas import ActionContext, Company
 from src.models.enums import RuleType, Severity, EnforcementMode, CompanyStatus
 
 @pytest.fixture
@@ -43,7 +43,7 @@ def test_scoped_retrieval_excludes_unrelated_modules(repo):
             structured_scope=ActionContext(system="odoo", application="project", resource="project.task", operation="create")
         )
     ])
-    task_rule = repo.review_candidate(
+    repo.review_candidate(
         candidate_id="cand_t1",
         decision="approve",
         reviewer="owner",
