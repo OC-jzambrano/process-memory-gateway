@@ -132,7 +132,11 @@ def test_full_pilot_demonstration_lifecycle(test_setup):
     retry_res = service.create_project_task(
         title="[PM-PILOT] Memory across sessions",
         description="Verify that approved company memory survives a new agent session.",
-        definition_of_done=["The task is visible in Odoo project 142."],
+        definition_of_done=[
+            "The task is visible in Odoo project 142.",
+            "The task description contains this Definition of Done.",
+            "Process Memory returns the created Odoo task ID."
+        ],
         correlation_id="corr_pilot_session_01"  # Same correlation ID
     )
     assert retry_res.status == RunStatus.CREATED

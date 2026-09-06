@@ -3,11 +3,10 @@ import logging
 from typing import Optional, List, Dict, Any, Literal
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from src.storage.repository import MemoryRepository
 from src.extractor.service import ProcessMemoryExtractorService
-from src.integrations.odoo17_xmlrpc import Odoo17XmlRpcExecutor
 from src.api.service import HostedProcessMemoryService
-from src.api.auth_context import set_current_context, AuthContextResolver
 from src.models.schemas import (
     ActionContext,
     DeterministicConstraint,
@@ -15,30 +14,25 @@ from src.models.schemas import (
     ReviewResult,
     TaskCreationResult,
     MemoryPack,
-    CandidateRule,
-    CanonicalRule,
-    RequestContext
+    CandidateRule
 )
-from src.models.enums import RoleType
 
 logger = logging.getLogger(__name__)
 
 # Initialize singletons
 repo = MemoryRepository()
 extractor = ProcessMemoryExtractorService()
+service = HostedProcessMemoryService(repo=repo, extractor=extractor)
 
-try:
-    executor = Odoo17XmlRpcExecutor.from_env()
-except Exception:
-    from src.integrations.mock_executor import MockTaskExecutor
-    executor = MockTaskExecutor(default_project_id=142)
+# Create FastMCP Server Instance with exactly five clean public tools
+mcp = FastMCP(
+    "AWS-Process-Memory-Gateway",
+    dependencies=["pydantic", "fastmcp"],
+    stateless_http=True,
+    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False)
+)
 
-service = HostedProcessMemoryService(repo=repo, extractor=extractor, executor=executor)
-
-# Create FastMCP Server Instance
-mcp = FastMCP("AWS-Process-Memory-Gateway", dependencies=["pydantic", "fastmcp"])
-
-# --- 1. REMEMBER COMPANY INSTRUCTION ---
+# --- TOOL 1: REMEMBER COMPANY INSTRUCTION ---
 @mcp.tool()
 def remember_company_instruction(
     instruction_text: str,
@@ -62,7 +56,7 @@ def remember_company_instruction(
     )
     return result.model_dump_json(indent=2)
 
-# --- 2. LIST MEMORY CANDIDATES ---
+# --- TOOL 2: LIST MEMORY CANDIDATES ---
 @mcp.tool()
 def list_memory_candidates(
     status: str = "pending_review"
@@ -79,7 +73,7 @@ def list_memory_candidates(
     candidates = service.list_memory_candidates(status=status)
     return json.dumps([c.model_dump() for c in candidates], indent=2)
 
-# --- 3. REVIEW MEMORY CANDIDATE ---
+# --- TOOL 3: REVIEW MEMORY CANDIDATE ---
 @mcp.tool()
 def review_memory_candidate(
     candidate_id: str,
@@ -115,7 +109,7 @@ def review_memory_candidate(
     )
     return result.model_dump_json(indent=2)
 
-# --- 4. GET COMPANY CONTEXT (MEMORY PACK) ---
+# --- TOOL 4: GET COMPANY CONTEXT (MEMORY PACK) ---
 @mcp.tool()
 def get_company_context(
     system: str = "odoo",
@@ -146,7 +140,7 @@ def get_company_context(
     )
     return pack.model_dump_json(indent=2)
 
-# --- 5. CREATE PROJECT TASK (MANAGED ODOO WRITE TOOL) ---
+# --- TOOL 5: CREATE PROJECT TASK (MANAGED ODOO WRITE TOOL) ---
 @mcp.tool()
 def create_project_task(
     title: str,
@@ -178,86 +172,6 @@ def create_project_task(
         correlation_id=correlation_id
     )
     return result.model_dump_json(indent=2)
-
-# --- BACKWARD COMPATIBILITY ALIASES ---
-@mcp.tool()
-def extract_memory_candidates(
-    interaction_text: str,
-    client_id: str = "odooconcept_demo",
-    process_name: str = "general"
-) -> str:
-    from src.api.memory_tools import ProcessMemoryTools
-    tools = ProcessMemoryTools(repo=repo, extractor=extractor)
-    result = tools.extract_memory_candidates(
-        interaction_text=interaction_text,
-        client_id=client_id,
-        process_name=process_name
-    )
-    return json.dumps({
-        "session_id": result.session_id,
-        "client_id": result.client_id,
-        "process_name": result.process_name,
-        "candidates_count": len(result.candidates),
-        "extraction_mode": result.extraction_mode.value,
-        "candidates": [c.model_dump() for c in result.candidates]
-    }, indent=2)
-
-@mcp.tool()
-def get_candidate_rules(
-    client_id: str = "odooconcept_demo",
-    status: str = "pending_review"
-) -> str:
-    from src.api.memory_tools import ProcessMemoryTools
-    tools = ProcessMemoryTools(repo=repo, extractor=extractor)
-    candidates = tools.get_candidate_rules(client_id=client_id, status=status)
-    return json.dumps({
-        "client_id": client_id,
-        "status": status,
-        "count": len(candidates),
-        "candidates": [c.model_dump() for c in candidates]
-    }, indent=2)
-
-@mcp.tool()
-def get_active_rules(
-    client_id: str = "odooconcept_demo",
-    process_name: Optional[str] = None
-) -> str:
-    from src.api.memory_tools import ProcessMemoryTools
-    tools = ProcessMemoryTools(repo=repo, extractor=extractor)
-    rules = tools.get_active_rules(client_id=client_id, process_name=process_name)
-    return json.dumps({
-        "client_id": client_id,
-        "process_name": process_name or "all",
-        "active_rules_count": len(rules),
-        "rules": [r.model_dump() for r in rules]
-    }, indent=2)
-
-@mcp.tool()
-def review_candidate_rule(
-    candidate_id: str,
-    decision: str = "approve",
-    reviewer: str = "juan_zambrano",
-    client_id: str = "odooconcept_demo",
-    edited_rule_text: Optional[str] = None,
-    notes: Optional[str] = None
-) -> str:
-    from src.api.memory_tools import ProcessMemoryTools
-    tools = ProcessMemoryTools(repo=repo, extractor=extractor)
-    canonical_rule = tools.review_candidate_rule(
-        candidate_id=candidate_id,
-        decision=decision,
-        reviewer=reviewer,
-        client_id=client_id,
-        edited_rule_text=edited_rule_text,
-        notes=notes
-    )
-    return json.dumps({
-        "status": "success" if canonical_rule else "rejected",
-        "candidate_id": candidate_id,
-        "decision": decision,
-        "rule_id": canonical_rule.rule_id if canonical_rule else None,
-        "rule": canonical_rule.model_dump() if canonical_rule else None
-    }, indent=2)
 
 if __name__ == "__main__":
     mcp.run()

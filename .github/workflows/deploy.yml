@@ -1,0 +1,99 @@
+name: Build, Test & Deploy to Hosted EC2 Pilot
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  test:
+    name: Test & Validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Test Suite
+        run: |
+          python -m pytest -m "not ai" -v --cov=src
+
+      - name: Lint with Ruff
+        run: |
+          ruff check .
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.5"
+
+      - name: Validate Terraform Pilot
+        run: |
+          cd infra/terraform/pilot
+          terraform init -backend=false
+          terraform fmt -check
+          terraform validate
+
+  deploy:
+    name: Build Image & Deploy via SSM
+    needs: test
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: pilot
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: eu-north-1
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push image to Amazon ECR
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: odoo-process-memory
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY:latest .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          echo "image_digest=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+      - name: Deploy Image to EC2 via AWS Systems Manager
+        env:
+          INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
+          IMAGE_DIGEST: ${{ steps.build-image.outputs.image_digest }}
+        run: |
+          aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --comment "Deploy image $IMAGE_TAG" \
+            --parameters commands='[
+              "set -e",
+              "cd /opt/process-memory",
+              "docker exec mcp-server python scripts/backup_sqlite.py || true",
+              "docker pull '"$IMAGE_DIGEST"'",
+              "sed -i \"s|image: .*|image: '"$IMAGE_DIGEST"'|\" docker-compose.yml",
+              "docker compose up -d",
+              "curl -f http://localhost:8000/health/ready || (echo \"Health check failed, rolling back!\" && docker compose rollback && exit 1)"
+            ]'

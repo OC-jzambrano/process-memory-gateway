@@ -63,6 +63,7 @@ class RoleType(str, Enum):
     MEMBER = "member"
 
 class RunStatus(str, Enum):
+    RUN_STARTED = "run_started"
     NEEDS_CLARIFICATION = "needs_clarification"
     CREATED = "created"
     FAILED = "failed"

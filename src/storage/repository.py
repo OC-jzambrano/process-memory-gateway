@@ -205,6 +205,14 @@ class MemoryRepository(BaseRepository):
                 return User(**dict(row))
         return None
 
+    def get_user_by_cognito_sub(self, cognito_sub: str) -> Optional[User]:
+        with db_session(self.db_path) as conn:
+            cursor = conn.cursor()
+            row = cursor.execute("SELECT * FROM users WHERE cognito_sub = ?", (cognito_sub,)).fetchone()
+            if row:
+                return User(**dict(row))
+        return None
+
     def upsert_membership(self, membership: Membership) -> Membership:
         now = self._now()
         with db_session(self.db_path) as conn:
@@ -758,6 +766,7 @@ class MemoryRepository(BaseRepository):
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(company_id, correlation_id) DO UPDATE SET
                         status=excluded.status,
+                        redacted_input_hash=excluded.redacted_input_hash,
                         odoo_task_id=excluded.odoo_task_id,
                         odoo_task_url=excluded.odoo_task_url,
                         result_payload_json=excluded.result_payload_json,

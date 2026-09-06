@@ -37,6 +37,9 @@ class BaseRepository(ABC):
     def get_user(self, user_id: str) -> Optional[User]: ...
 
     @abstractmethod
+    def get_user_by_cognito_sub(self, cognito_sub: str) -> Optional[User]: ...
+
+    @abstractmethod
     def upsert_user(self, user: User) -> User: ...
 
     @abstractmethod

@@ -1,8 +1,11 @@
 import uuid
 import hashlib
+import json
+import logging
 from typing import Optional, List, Dict, Any, Literal, Union
 from datetime import datetime, timezone
 
+from src.config import AWS_REGION, ALLOW_LIVE_ODOO_WRITES
 from src.storage.base_repository import BaseRepository
 from src.extractor.service import ProcessMemoryExtractorService
 from src.governance.memory_retriever import MemoryRetriever
@@ -38,6 +41,8 @@ from src.models.enums import (
     ExecutionEventType
 )
 
+logger = logging.getLogger(__name__)
+
 class HostedProcessMemoryService:
     """
     Unified Application Service powering both Hosted Streamable HTTP MCP and local stdio MCP.
@@ -55,10 +60,35 @@ class HostedProcessMemoryService:
         self.retriever = MemoryRetriever(repo=self.repo)
         self.validator = TaskValidator()
         self.auth_resolver = AuthContextResolver(repo=self.repo)
-        self.executor = executor or Odoo17XmlRpcExecutor()
+        self._injected_executor = executor
 
     def _now(self) -> str:
         return datetime.now(timezone.utc).isoformat()
+
+    def resolve_executor_for_company(self, company_id: str) -> TaskExecutor:
+        """Resolves task executor for company. Fails closed if live writes are disabled or config missing."""
+        if self._injected_executor is not None:
+            return self._injected_executor
+
+        conn_config = self.repo.get_odoo_connection(company_id)
+        if not conn_config:
+            try:
+                return Odoo17XmlRpcExecutor.from_env()
+            except Exception as e:
+                raise OdooExecutionError(f"No Odoo connection configured for company '{company_id}'.") from e
+
+        if conn_config.secret_arn:
+            try:
+                import boto3
+                sm = boto3.client("secretsmanager", region_name=AWS_REGION)
+                secret_val = sm.get_secret_value(SecretId=conn_config.secret_arn)
+                secret_data = json.loads(secret_val.get("SecretString", "{}"))
+                return Odoo17XmlRpcExecutor.from_secret_dict(secret_data)
+            except Exception as e:
+                logger.error("Failed to retrieve secret from Secrets Manager: %s", str(e))
+                raise OdooExecutionError(f"Failed to retrieve Odoo secret for company '{company_id}'.") from e
+
+        return Odoo17XmlRpcExecutor.from_env()
 
     # --- 1. REMEMBER COMPANY INSTRUCTION ---
     def remember_company_instruction(
@@ -253,23 +283,45 @@ class HostedProcessMemoryService:
 
         cid = correlation_id or f"corr_{uuid.uuid4().hex}"
         target_project_id = project_id or 142
+        input_hash = hashlib.sha256(f"{title}:{description}:{definition_of_done}:{target_project_id}".encode()).hexdigest()
 
-        # 1. Idempotency Check: (company_id, correlation_id)
+        # 1. Idempotency and Correlation Check
         existing_run = self.repo.get_execution_run_by_correlation(
             company_id=ctx.company_id,
             correlation_id=cid
         )
-        if existing_run and existing_run.status == RunStatus.CREATED:
-            return TaskCreationResult(
-                status=RunStatus.CREATED,
-                run_id=existing_run.run_id,
-                correlation_id=cid,
-                applied_rule_ids=[r.get("rule_id") for r in existing_run.applied_rules_snapshot if "rule_id" in r],
-                odoo_task_id=existing_run.odoo_task_id,
-                odoo_task_url=existing_run.odoo_task_url,
-                task_name=existing_run.result_payload.get("task_name", title),
-                message="Idempotency match: Task was already created previously. Returned cached execution result."
-            )
+        if existing_run:
+            # Uncertain execution outcome requires manual reconciliation without retrying
+            if existing_run.status == RunStatus.RECONCILIATION_REQUIRED:
+                return TaskCreationResult(
+                    status=RunStatus.RECONCILIATION_REQUIRED,
+                    run_id=existing_run.run_id,
+                    correlation_id=cid,
+                    message="Prior execution outcome was uncertain. Manual reconciliation is required before retrying; automatic re-creation is prohibited."
+                )
+
+            # Reject reuse with changed input parameters for runs that already began execution or failed
+            if existing_run.status != RunStatus.NEEDS_CLARIFICATION:
+                if existing_run.redacted_input_hash and existing_run.redacted_input_hash != input_hash:
+                    return TaskCreationResult(
+                        status=RunStatus.FAILED,
+                        run_id=existing_run.run_id,
+                        correlation_id=cid,
+                        message=f"Correlation ID '{cid}' was already used with different task parameters. Reusing correlation IDs with changed inputs is forbidden."
+                    )
+
+            # Replay successful result for identical retries
+            if existing_run.status == RunStatus.CREATED:
+                return TaskCreationResult(
+                    status=RunStatus.CREATED,
+                    run_id=existing_run.run_id,
+                    correlation_id=cid,
+                    applied_rule_ids=[r.get("rule_id") for r in existing_run.applied_rules_snapshot if "rule_id" in r],
+                    odoo_task_id=existing_run.odoo_task_id,
+                    odoo_task_url=existing_run.odoo_task_url,
+                    task_name=existing_run.result_payload.get("task_name", title),
+                    message="Idempotency match: Task was already created previously. Returned cached execution result."
+                )
 
         # 2. Retrieve exact active rules for project.task:create
         active_rules = self.repo.get_active_rules(client_id=ctx.company_id)
@@ -298,7 +350,6 @@ class HostedProcessMemoryService:
             operation="create",
             fields=["name", "description", "definition_of_done", "project_id"]
         )
-        input_hash = hashlib.sha256(f"{title}:{description}:{definition_of_done}".encode()).hexdigest()
 
         applied_rules_snapshot = [
             {
@@ -325,10 +376,7 @@ class HostedProcessMemoryService:
                 error_detail=validation.message,
                 created_at=self._now()
             )
-            if existing_run:
-                self.repo.update_execution_run(run_record)
-            else:
-                self.repo.create_execution_run(run_record)
+            self.repo.create_execution_run(run_record)
 
             self.repo.add_execution_event(
                 ExecutionEventRecord(
@@ -349,9 +397,25 @@ class HostedProcessMemoryService:
                 message=validation.message
             )
 
-        # 5. Execute Managed Task Creation in Odoo with Read-Back
+        # 5. Atomically reserve run record with status RUN_STARTED before executing write
+        pending_record = ExecutionRunRecord(
+            run_id=run_id,
+            company_id=ctx.company_id,
+            user_id=ctx.user_id,
+            correlation_id=cid,
+            action_scope=action_scope,
+            adapter_kind="odoo17_xmlrpc",
+            status=RunStatus.RUN_STARTED,
+            redacted_input_hash=input_hash,
+            applied_rules_snapshot=applied_rules_snapshot,
+            created_at=self._now()
+        )
+        self.repo.create_execution_run(pending_record)
+
+        # 6. Execute Managed Task Creation in Odoo with Read-Back
         try:
-            task_record = self.executor.create_project_task(
+            executor = self.resolve_executor_for_company(ctx.company_id)
+            task_record = executor.create_project_task(
                 title=title,
                 description=description,
                 definition_of_done=definition_of_done,
@@ -375,11 +439,7 @@ class HostedProcessMemoryService:
                 result_payload={"task_name": task_record.name, "project_id": task_record.project_id},
                 created_at=self._now()
             )
-
-            if existing_run:
-                self.repo.update_execution_run(run_record)
-            else:
-                self.repo.create_execution_run(run_record)
+            self.repo.create_execution_run(run_record)
 
             self.repo.add_execution_event(
                 ExecutionEventRecord(

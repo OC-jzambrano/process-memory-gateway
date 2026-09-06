@@ -1,0 +1,56 @@
+services:
+  caddy:
+    image: caddy:2.8-alpine
+    container_name: caddy-proxy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      mcp-server:
+        condition: service_healthy
+    networks:
+      - mcp-network
+
+  mcp-server:
+    build: .
+    image: process-memory-gateway:latest
+    container_name: mcp-server
+    restart: unless-stopped
+    environment:
+      - ENVIRONMENT=production
+      - HOSTED_MODE=true
+      - PROCESS_MEMORY_DATA_DIR=/mnt/data
+      - PROCESS_MEMORY_DB_PATH=/mnt/data/process_memory.db
+      - AWS_REGION=${AWS_REGION:-eu-north-1}
+      - COGNITO_USER_POOL_ID=${COGNITO_USER_POOL_ID}
+      - COGNITO_APP_CLIENT_ID=${COGNITO_APP_CLIENT_ID}
+      - COGNITO_RESOURCE_SERVER_IDENTIFIER=${COGNITO_RESOURCE_SERVER_IDENTIFIER:-https://mcp.example.com}
+      - COGNITO_REQUIRED_SCOPE=mcp:tools
+      - ODOO_SECRET_ARN=${ODOO_SECRET_ARN}
+      - ALLOW_LIVE_ODOO_WRITES=${ALLOW_LIVE_ODOO_WRITES:-false}
+    volumes:
+      - /mnt/process-memory-data:/mnt/data
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - mcp-network
+
+networks:
+  mcp-network:
+    driver: bridge
+
+volumes:
+  caddy_data:
+  caddy_config:

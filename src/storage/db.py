@@ -223,13 +223,15 @@ BEGIN
 END;
 """
 
+from src.config import DEFAULT_DB_PATH, SQLITE_BUSY_TIMEOUT_MS
+
 def get_connection(db_path: Union[str, Path] = DEFAULT_DB_PATH) -> sqlite3.Connection:
     """Returns a SQLite connection configured with row factory, foreign keys, WAL mode, and busy timeout."""
-    conn = sqlite3.connect(str(db_path), timeout=10.0)
+    conn = sqlite3.connect(str(db_path), timeout=float(SQLITE_BUSY_TIMEOUT_MS) / 1000.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
     conn.execute("PRAGMA journal_mode = WAL;")
-    conn.execute("PRAGMA busy_timeout = 5000;")
+    conn.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS};")
     return conn
 
 @contextmanager
@@ -275,3 +277,21 @@ def init_db(db_path: Union[str, Path] = DEFAULT_DB_PATH) -> None:
         with conn:
             conn.executescript(SCHEMA_SQL)
             _migrate_columns_if_needed(conn)
+
+def run_migrations(db_path: Union[str, Path] = DEFAULT_DB_PATH) -> int:
+    """Explicit migration runner called as a deployment step."""
+    init_db(db_path)
+    with db_session(db_path) as conn:
+        with conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    version     INTEGER PRIMARY KEY,
+                    name        TEXT NOT NULL,
+                    applied_at  TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+            """)
+            applied = conn.execute("SELECT MAX(version) FROM schema_migrations;").fetchone()[0] or 0
+            if applied < 1:
+                conn.execute("INSERT INTO schema_migrations (version, name) VALUES (1, 'initial_schema_and_json_columns');")
+                return 1
+            return applied
