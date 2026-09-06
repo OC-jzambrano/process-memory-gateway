@@ -1,7 +1,12 @@
 .env
+.env.*
 *.env
 data/
 *.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
 .git/
 __pycache__/
 .pytest_cache/
@@ -12,3 +17,9 @@ scratch/
 .idea/
 .vscode/
 tests/
+infra/terraform/.terraform/
+*.tfstate*
+*.pem
+*.key
+backups/
+

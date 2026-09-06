@@ -22,52 +22,73 @@ It continuously extracts tacit and explicit operational business rules from dial
 - **Rule Versioning:** Canonical rules feature atomic versioning (`v1` &rarr; `v2` with `superseded` pointers) to prevent stale rule enforcement or divergent branching.
 - **Tenant Authorization & Security Principal:** Every operation requires tenant validation via authenticated `Principal` context, preventing cross-tenant policy access or session hijacking.
 - **PII & Credential Redaction:** Pre-transmission redaction utility to mask credit cards, API keys, emails, and phone numbers before cloud LLM ingestion.
-- **Universal Tool API:** Standard 4-tool interface ready for MCP (Model Context Protocol) integration.
+- **Universal 5-Tool MCP Surface:** Exposes exactly 5 public tools over Model Context Protocol (MCP) with zero caller-controlled identity parameters.
+- **Server-Resolved Identity & Tenant Isolation:** Caller identity (`company_id`, `user_id`, `role`) is extracted directly from the Cognito OAuth Bearer token—never passed as tool arguments.
 
 ---
 
-## System Architecture
+## System Architecture & Workflow
 
 ```mermaid
 flowchart TD
-    A[User Dialogue / Conversation Turn] --> B[ProcessMemoryTools API Layer]
-    B --> C[Security Principal & Tenant Check]
-    C --> D{ProcessMemoryExtractorService}
-    
-    subgraph "Provider Cascade"
-        D -->|Primary: OpenAI| E[OpenAI GPT-4o-mini / GPT-4o]
-        D -->|Secondary: Bedrock| F[Claude 3.5/4.5 / Nova via Bedrock]
-        D -->|Tertiary: Offline / Throttled| G[Deterministic Rule Parser]
+    subgraph "External AI Clients"
+        A[Claude / Codex / Antigravity Agent]
     end
-    
-    E --> H[Structured JSON Output Parser & Provenance Verifier]
-    F --> H
-    G --> H
-    
-    H --> I[(SQLite: extraction_sessions)]
-    H --> J[(SQLite: memory_candidates)]
-    J --> K{Status: pending_review}
-    
-    K -->|Human Approves| L[(SQLite: canonical_rules)]
-    K -->|Human Rejects| M[Archived as Rejected]
-    K -->|Human Edits| N[Edited Rule Promoted to Canonical]
-    
-    L --> O[get_active_rules Context Retrieval]
-    M -.->|Append-Only Audit| P[(SQLite: review_events)]
-    N -.->|Append-Only Audit| P
-    L -.->|Append-Only Audit| P
+
+    subgraph "Public MCP Gateway (server.py / http_app.py)"
+        B[HTTPS / Bearer Auth / Tenant Resolution]
+        B --> C{5 Approved MCP Tools}
+        C --> T1[remember_company_instruction]
+        C --> T2[list_memory_candidates]
+        C --> T3[review_memory_candidate]
+        C --> T4[get_company_context]
+        C --> T5[create_project_task]
+    end
+
+    subgraph "Governance & Policy Memory Core"
+        T1 --> D[(memory_candidates: pending_review)]
+        T2 --> D
+        T3 -->|Approve / Promote| E[(canonical_rules: active v1/v2)]
+        T3 -.->|Append-Only Audit| F[(review_events: immutable)]
+        T4 --> E
+    end
+
+    subgraph "Managed Odoo Task Execution"
+        T5 --> G[Task Readiness Validator]
+        E -.->|Enforce Canonical Rules| G
+        G -->|Validated| H[Odoo XML-RPC Adapter]
+        H --> I[Odoo project.task]
+        G -.->|Evidence Record| J[(execution_runs & execution_events)]
+    end
 ```
 
 ---
 
-## Core Toolset
+## Approved Public MCP Toolset
 
-| Tool Name | Method Signature | Purpose |
+The public MCP gateway exposes exactly these 5 tools. All caller identity parameters (`company_id`, `client_id`, `reviewer`, `role`) are server-resolved from the authenticated request context.
+
+| Tool Name | Parameters | Purpose & Lifecycle State |
 | :--- | :--- | :--- |
-| `extract_memory_candidates` | `(interaction_text, client_id, process_name, principal)` | Analyzes dialogue, validates verbatim quote, stages candidates as `pending_review`. |
-| `get_candidate_rules` | `(client_id, status='pending_review', principal)` | Surfaces staged candidate rules awaiting human review for the tenant. |
-| `review_candidate_rule` | `(candidate_id, decision, reviewer, client_id, principal, ...)` | Processes human sign-off (`approve`, `reject`, `edit`), promotes to canonical `v1`, logs immutable audit event. |
-| `get_active_rules` | `(client_id, process_name, principal)` | Returns active canonical rules for policy enforcement. **Guarantees 0 unapproved leakage.** |
+| `remember_company_instruction` | `instruction_text`, `context_hint=None` | Stages a proposed company instruction into `memory_candidates` (`pending_review`). Does **not** enforce until human sign-off. |
+| `list_memory_candidates` | `status="pending_review"` | Lists staged candidates awaiting human review for the authenticated company. |
+| `review_memory_candidate` | `candidate_id`, `decision` (`approve`/`edit`/`reject`), `edited_rule_text=None`, `edited_scope=None`, `edited_constraint=None`, `notes=None` | Human-in-the-loop review. Approving promotes the candidate into an active, versioned `CanonicalRule` and logs an append-only audit event. |
+| `get_company_context` | `system="odoo"`, `application=None`, `resource=None`, `operation=None`, `fields=None` | Retrieves active canonical policies for the given action scope as a structured `MemoryPack`. Guarantees zero leakage of unapproved policies. |
+| `create_project_task` | `title`, `description`, `definition_of_done=None`, `project_id=None`, `correlation_id=None` | Managed task creation gateway. Validates DoD and requirements against active canonical policies, records execution evidence, and executes Odoo XML-RPC write. |
+
+### Internal vs. Public Tool API Delineation
+
+- **Public MCP Gateway (`server.py`, `src/api/http_app.py`):** Exposes only the 5 approved tools above. Identity is resolved from the session context. Legacy extraction wrappers and raw query tools are omitted from the protocol surface.
+- **Internal APIs (`src/api/memory_tools.py`, `src/storage/repository.py`):** `ProcessMemoryTools` and `MemoryRepository` remain available for internal Python components, test suites, and batch utilities requiring explicit `Principal` objects.
+
+---
+
+## Instruction Approval Lifecycle
+
+1. **Staging:** An agent or user provides operational guidelines. Calling `remember_company_instruction` runs the extraction engine and stages candidate rules as `pending_review`.
+2. **Review & Sign-Off:** Company owners review candidates via `list_memory_candidates` and approve or edit them via `review_memory_candidate`. This promotes them to active canonical rules with immutable audit events.
+3. **Scoped Enforcement:** When performing ERP operations, agents retrieve active policies via `get_company_context` to understand constraints.
+4. **Managed Execution:** The agent calls `create_project_task`. The gateway retrieves approved company memory internally, validates mandatory criteria (e.g. Definition of Done), records audit evidence, and only then calls Odoo.
 
 ---
 

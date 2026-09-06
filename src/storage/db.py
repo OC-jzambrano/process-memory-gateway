@@ -277,6 +277,16 @@ def init_db(db_path: Union[str, Path] = DEFAULT_DB_PATH) -> None:
         with conn:
             conn.executescript(SCHEMA_SQL)
             _migrate_columns_if_needed(conn)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    version     INTEGER PRIMARY KEY,
+                    name        TEXT NOT NULL,
+                    applied_at  TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+            """)
+            applied = conn.execute("SELECT MAX(version) FROM schema_migrations;").fetchone()[0]
+            if applied is None or applied < 1:
+                conn.execute("INSERT OR IGNORE INTO schema_migrations (version, name) VALUES (1, 'initial_schema_and_json_columns');")
 
 def run_migrations(db_path: Union[str, Path] = DEFAULT_DB_PATH) -> int:
     """Explicit migration runner called as a deployment step."""

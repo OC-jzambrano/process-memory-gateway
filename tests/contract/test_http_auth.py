@@ -256,10 +256,13 @@ def test_valid_token_and_tenant_succeeds(auth_setup):
     client = auth_setup["client"]
     token = make_token(auth_setup["private_key"], sub="sub-alice-12345")
 
-    # FastMCP expects an MCP request payload (or empty initialization)
+    # FastMCP Streamable HTTP expects client to accept application/json and text/event-stream
     res = client.post(
         "/companies/company_a/mcp",
-        headers={"Authorization": f"Bearer {token}"},
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json, text/event-stream"
+        },
         json={
             "jsonrpc": "2.0",
             "id": 1,
@@ -268,3 +271,45 @@ def test_valid_token_and_tenant_succeeds(auth_setup):
         }
     )
     assert res.status_code == 200
+    assert "text/event-stream" in res.headers.get("content-type", "")
+
+def test_incompatible_accept_header_returns_406(auth_setup):
+    """Preserved Accept headers: client requesting incompatible media type must receive 406."""
+    client = auth_setup["client"]
+    token = make_token(auth_setup["private_key"], sub="sub-alice-12345")
+
+    res = client.post(
+        "/companies/company_a/mcp",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "text/plain"
+        },
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list",
+            "params": {}
+        }
+    )
+    assert res.status_code == 406
+
+def test_health_ready_probe_503_does_not_leak_paths(auth_setup, monkeypatch):
+    """503 readiness failure must never leak internal filesystem paths or raw exceptions."""
+    import src.api.http_app as http_mod
+    client = auth_setup["client"]
+
+    # Point to nonexistent DB path to trigger error
+    class BrokenRepo:
+        db_path = "/nonexistent/private/path/db.sqlite"
+
+    monkeypatch.setattr(http_mod, "repo", BrokenRepo())
+    res = client.get("/health/ready")
+    assert res.status_code == 503
+    data = res.json()
+    assert data["status"] == "not_ready"
+    # Ensure no path fragments leaked
+    res_text = res.text.lower()
+    assert "nonexistent" not in res_text
+    assert "private" not in res_text
+    assert "sqlite" not in res_text
+

@@ -67,6 +67,15 @@ COGNITO_REGION = os.getenv("COGNITO_REGION", AWS_REGION)
 COGNITO_APP_CLIENT_ID = os.getenv("COGNITO_APP_CLIENT_ID", "")
 COGNITO_RESOURCE_SERVER_IDENTIFIER = os.getenv("COGNITO_RESOURCE_SERVER_IDENTIFIER", "https://mcp.example.com")
 COGNITO_REQUIRED_SCOPE = os.getenv("COGNITO_REQUIRED_SCOPE", "mcp:tools")
+COGNITO_DOMAIN = os.getenv("COGNITO_DOMAIN", "")
+
+# Domain & Transport Security Settings
+DOMAIN_NAME = os.getenv("DOMAIN_NAME", "localhost")
+_raw_allowed_hosts = os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1,testserver")
+ALLOWED_HOSTS = [h.strip() for h in _raw_allowed_hosts.split(",") if h.strip()]
+if DOMAIN_NAME and DOMAIN_NAME not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append(DOMAIN_NAME)
+
 
 # Odoo Integration Secrets & Runtime Configuration (Loaded from Env / Secrets Manager ONLY)
 ODOO_URL = os.getenv("ODOO_URL", "")

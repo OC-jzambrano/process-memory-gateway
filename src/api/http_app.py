@@ -14,7 +14,9 @@ from src.config import (
     COGNITO_REGION,
     COGNITO_APP_CLIENT_ID,
     COGNITO_RESOURCE_SERVER_IDENTIFIER,
-    COGNITO_REQUIRED_SCOPE
+    COGNITO_REQUIRED_SCOPE,
+    COGNITO_DOMAIN,
+    DOMAIN_NAME
 )
 from src.storage.db import get_connection
 from src.storage.repository import MemoryRepository
@@ -35,45 +37,73 @@ async def health_live(request: Request) -> JSONResponse:
     return JSONResponse({"status": "alive"})
 
 async def health_ready(request: Request) -> JSONResponse:
-    """Readiness probe: verifies persistent storage mount and database connectivity."""
-    errors = []
-    
+    """
+    Readiness probe: verifies persistent storage mount, database connectivity,
+    and schema migrations table without leaking internal filesystem paths on 503.
+    """
+    storage_ok = True
+    db_ok = True
+    schema_version: Optional[int] = None
+
     # 1. Storage mount check
     if not DATA_DIR.exists() or not DATA_DIR.is_dir():
-        errors.append(f"Storage mount directory '{DATA_DIR}' missing or not a directory.")
+        storage_ok = False
+        logger.error("Readiness check failed: persistent storage mount is not available.")
 
-    # 2. Database connectivity check
+    # 2. Database connectivity & schema migrations check
     try:
-        conn = get_connection()
+        active_db_path = getattr(repo, "db_path", None)
+        conn = get_connection(active_db_path) if active_db_path else get_connection()
         try:
             cursor = conn.cursor()
             cursor.execute("SELECT 1;").fetchone()
+            row = cursor.execute("SELECT MAX(version) FROM schema_migrations;").fetchone()
+            if row is not None and row[0] is not None:
+                schema_version = int(row[0])
+            else:
+                schema_version = 0
         finally:
             conn.close()
     except Exception as e:
-        errors.append(f"Database connection error: {str(e)}")
+        db_ok = False
+        logger.error("Readiness check failed: database connectivity or schema verification error: %s", str(e))
 
-    if errors:
+    if not storage_ok or not db_ok:
         return JSONResponse(
-            {"status": "not_ready", "errors": errors},
+            {
+                "status": "not_ready",
+                "checks": {
+                    "storage": "ok" if storage_ok else "failed",
+                    "database": "ok" if db_ok else "failed"
+                }
+            },
             status_code=503
         )
 
     return JSONResponse({
         "status": "ready",
         "database": "connected",
-        "storage": "mounted"
+        "storage": "mounted",
+        "schema_version": schema_version
     })
 
 async def oauth_discovery(request: Request) -> JSONResponse:
     """RFC 8414 OAuth 2.0 Authorization Server Metadata."""
-    domain_name = request.headers.get("host", "mcp.example.com")
-    issuer = f"https://cognito-idp.{COGNITO_REGION}.amazonaws.com/{COGNITO_USER_POOL_ID}" if COGNITO_USER_POOL_ID else f"https://{domain_name}"
-    
+    host_domain = request.headers.get("host", DOMAIN_NAME or "localhost")
+    issuer = f"https://cognito-idp.{COGNITO_REGION}.amazonaws.com/{COGNITO_USER_POOL_ID}" if COGNITO_USER_POOL_ID else f"https://{host_domain}"
+
+    # Determine real OAuth endpoints (Cognito Managed Login domain if configured)
+    if COGNITO_DOMAIN:
+        auth_base = COGNITO_DOMAIN if COGNITO_DOMAIN.startswith("http") else f"https://{COGNITO_DOMAIN}"
+    elif COGNITO_USER_POOL_ID:
+        auth_base = issuer
+    else:
+        auth_base = f"https://{host_domain}"
+
     metadata = {
         "issuer": issuer,
-        "authorization_endpoint": f"{issuer}/oauth2/authorize",
-        "token_endpoint": f"{issuer}/oauth2/token",
+        "authorization_endpoint": f"{auth_base}/oauth2/authorize",
+        "token_endpoint": f"{auth_base}/oauth2/token",
         "jwks_uri": f"{issuer}/.well-known/jwks.json",
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code"],
@@ -83,103 +113,86 @@ async def oauth_discovery(request: Request) -> JSONResponse:
     }
     return JSONResponse(metadata)
 
-async def handle_company_mcp(request: Request) -> Response:
+class CompanyMCPHandler:
     """
-    Stateless Streamable HTTP endpoint for /companies/{company_slug}/mcp.
-    Enforces Cognito OAuth 2.0 Bearer token validation and tenant isolation.
+    Direct ASGI delegation endpoint for /companies/{company_slug}/mcp.
+    Enforces Cognito OAuth 2.0 Bearer token validation and tenant isolation,
+    then forwards directly to FastMCP's Streamable HTTP app without response buffering.
+    Preserves streaming, disconnects, status codes, and client Accept headers.
     """
-    company_slug = request.path_params.get("company_slug")
-    if not company_slug:
-        return JSONResponse({"error": "missing_company_slug"}, status_code=400)
+    def __init__(self, target_app):
+        self.target_app = target_app
 
-    auth_header = request.headers.get("Authorization", "")
-    client_agent = request.headers.get("User-Agent", "unknown-mcp-client")
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return
 
-    req_ctx: Optional[RequestContext] = None
+        path_params = scope.get("path_params", {})
+        company_slug = path_params.get("company_slug")
+        if not company_slug:
+            res = JSONResponse({"error": "missing_company_slug"}, status_code=400)
+            await res(scope, receive, send)
+            return
 
-    if not auth_header or not auth_header.lower().startswith("bearer "):
-        return JSONResponse(
-            {"error": "unauthorized", "message": "Missing Bearer token."},
-            status_code=401,
-            headers={"WWW-Authenticate": 'Bearer realm="ProcessMemory"'}
-        )
+        # Extract headers from ASGI scope
+        raw_headers = scope.get("headers", [])
+        headers = {k.lower(): v.decode("latin1") for k, v in raw_headers}
+        auth_header = headers.get(b"authorization", "")
+        client_agent = headers.get(b"user-agent", "unknown-mcp-client")
 
-    token = auth_header[7:].strip()
-    if not token:
-        return JSONResponse(
-            {"error": "unauthorized", "message": "Bearer token cannot be empty."},
-            status_code=401,
-            headers={"WWW-Authenticate": 'Bearer error="invalid_token"'}
-        )
+        if not auth_header or not auth_header.lower().startswith("bearer "):
+            res = JSONResponse(
+                {"error": "unauthorized", "message": "Missing Bearer token."},
+                status_code=401,
+                headers={"WWW-Authenticate": 'Bearer realm="ProcessMemory"'}
+            )
+            await res(scope, receive, send)
+            return
 
-    try:
-        claims = token_verifier.verify_token(token)
-        req_ctx = resolve_authenticated_context(
-            claims=claims,
-            company_slug=company_slug,
-            repo=repo,
-            client_agent=client_agent
-        )
-    except AuthenticationError as e:
-        return JSONResponse(
-            {"error": "unauthorized", "message": str(e)},
-            status_code=401,
-            headers={"WWW-Authenticate": 'Bearer error="invalid_token"'}
-        )
-    except AuthorizationError as e:
-        return JSONResponse(
-            {"error": "forbidden", "message": str(e)},
-            status_code=403
-        )
+        token = auth_header[7:].strip()
+        if not token:
+            res = JSONResponse(
+                {"error": "unauthorized", "message": "Bearer token cannot be empty."},
+                status_code=401,
+                headers={"WWW-Authenticate": 'Bearer error="invalid_token"'}
+            )
+            await res(scope, receive, send)
+            return
 
-    set_current_context(req_ctx)
-    try:
-        # Rewrite ASGI scope to route into FastMCP's /mcp handler
-        scope = dict(request.scope)
-        scope["path"] = "/mcp"
-        scope["raw_path"] = b"/mcp"
+        try:
+            claims = token_verifier.verify_token(token)
+            req_ctx = resolve_authenticated_context(
+                claims=claims,
+                company_slug=company_slug,
+                repo=repo,
+                client_agent=client_agent
+            )
+        except AuthenticationError as e:
+            res = JSONResponse(
+                {"error": "unauthorized", "message": str(e)},
+                status_code=401,
+                headers={"WWW-Authenticate": 'Bearer error="invalid_token"'}
+            )
+            await res(scope, receive, send)
+            return
+        except AuthorizationError as e:
+            res = JSONResponse(
+                {"error": "forbidden", "message": str(e)},
+                status_code=403
+            )
+            await res(scope, receive, send)
+            return
 
-        # Ensure Accept header accommodates Streamable HTTP if omitted or generic
-        raw_headers = list(scope.get("headers", []))
-        has_accept = False
-        new_headers = []
-        for k, v in raw_headers:
-            if k.lower() == b"accept":
-                has_accept = True
-                val = v.decode("latin1", errors="replace")
-                if "text/event-stream" not in val or "application/json" not in val:
-                    new_headers.append((k, b"application/json, text/event-stream"))
-                else:
-                    new_headers.append((k, v))
-            else:
-                new_headers.append((k, v))
-        if not has_accept:
-            new_headers.append((b"accept", b"application/json, text/event-stream"))
-        scope["headers"] = new_headers
-        
-        async def receive():
-            return await request.receive()
+        # Forward directly into FastMCP Streamable HTTP app
+        target_scope = dict(scope)
+        target_scope["path"] = "/mcp"
+        target_scope["raw_path"] = b"/mcp"
 
-        response_started = False
-        response_status = 200
-        response_headers = []
-        response_body = []
-
-        async def send(message):
-            nonlocal response_started, response_status, response_headers, response_body
-            if message["type"] == "http.response.start":
-                response_started = True
-                response_status = message["status"]
-                response_headers = message.get("headers", [])
-            elif message["type"] == "http.response.body":
-                response_body.append(message.get("body", b""))
-
-        await fastmcp_http_app(scope, receive, send)
-
-        headers_dict = {k.decode("latin1"): v.decode("latin1") for k, v in response_headers}
-        return Response(content=b"".join(response_body), status_code=response_status, headers=headers_dict)
-    finally:
-        set_current_context(None)
+        set_current_context(req_ctx)
+        try:
+            await self.target_app(target_scope, receive, send)
+        finally:
+            set_current_context(None)
 
 def create_app() -> Starlette:
     """Creates the ASGI application instance."""
@@ -191,7 +204,7 @@ def create_app() -> Starlette:
             Route("/health/ready", health_ready, methods=["GET"]),
             Route("/.well-known/oauth-authorization-server", oauth_discovery, methods=["GET"]),
             Route("/.well-known/openid-configuration", oauth_discovery, methods=["GET"]),
-            Route("/companies/{company_slug}/mcp", handle_company_mcp, methods=["GET", "POST", "HEAD", "OPTIONS"]),
+            Route("/companies/{company_slug}/mcp", CompanyMCPHandler(fastmcp_http_app), methods=["GET", "POST", "HEAD", "OPTIONS"]),
         ]
     )
     return app
