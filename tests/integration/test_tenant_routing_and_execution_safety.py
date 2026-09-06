@@ -1,13 +1,10 @@
 import uuid
 import time
-import threading
 from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from src.models.schemas import (
     Company,
-    User,
-    Membership,
     OdooConnectionConfig,
     ActionContext,
     DeterministicConstraint,
@@ -17,7 +14,6 @@ from src.models.schemas import (
 from src.models.enums import (
     RoleType,
     CompanyStatus,
-    MembershipStatus,
     RunStatus,
     ExecutionPhase,
     RuleType,
@@ -26,11 +22,10 @@ from src.models.enums import (
     ConstraintKind
 )
 from src.storage.repository import MemoryRepository
-from src.api.service import HostedProcessMemoryService, compute_canonical_hash_v2, compute_legacy_hash_v1
+from src.api.service import HostedProcessMemoryService, compute_legacy_hash_v1
 from src.api.auth_context import request_context
 from src.integrations.mock_executor import MockTaskExecutor
 from src.governance.reconciliation import reconcile_run_by_operator
-from src.governance.scope_matcher import filter_and_order_rules, matches_scope
 
 @pytest.fixture
 def clean_db(tmp_path):
@@ -46,8 +41,8 @@ def test_tenant_isolated_routing_and_project_override_rejection(clean_db):
     repo = clean_db
 
     # Setup Company A (Project 100) and Company B (Project 200)
-    co_a = repo.upsert_company(Company(company_id="co_a", company_slug="co-a", name="Company A", status=CompanyStatus.ACTIVE))
-    co_b = repo.upsert_company(Company(company_id="co_b", company_slug="co-b", name="Company B", status=CompanyStatus.ACTIVE))
+    repo.upsert_company(Company(company_id="co_a", company_slug="co-a", name="Company A", status=CompanyStatus.ACTIVE))
+    repo.upsert_company(Company(company_id="co_b", company_slug="co-b", name="Company B", status=CompanyStatus.ACTIVE))
 
     repo.upsert_odoo_connection(OdooConnectionConfig(
         connection_id="conn_a",
@@ -261,7 +256,7 @@ def test_idempotency_changed_input_and_legacy_v1_hash(clean_db):
     # 5. Legacy v1 hash compatibility
     cid_legacy = f"corr_legacy_{uuid.uuid4().hex}"
     legacy_hash = compute_legacy_hash_v1("Legacy Task", "Legacy Desc", ["Item 1"], 102)
-    run_leg = repo.create_execution_run(clean_db._parse_run_row({
+    repo.create_execution_run(clean_db._parse_run_row({
         "run_id": f"run_leg_{uuid.uuid4().hex[:8]}",
         "company_id": "co_idemp",
         "user_id": "usr_idemp",
@@ -485,7 +480,7 @@ def test_startup_reconciles_abandoned_runs(clean_db):
     }))
 
     # Instantiating service runs startup reconciliation
-    service = HostedProcessMemoryService(repo=repo, executor=MockTaskExecutor())
+    HostedProcessMemoryService(repo=repo, executor=MockTaskExecutor())
     reconciled = repo.get_execution_run("run_abandoned_1", company_id="co_crash")
     assert reconciled.status == RunStatus.RECONCILIATION_REQUIRED
     assert reconciled.error_code == "abandoned_run"

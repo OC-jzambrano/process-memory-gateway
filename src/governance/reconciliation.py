@@ -1,6 +1,5 @@
 import uuid
 import logging
-from typing import Optional
 from src.storage.base_repository import BaseRepository
 from src.integrations.base_executor import TaskExecutor
 from src.models.schemas import ExecutionRunRecord, ExecutionEventRecord

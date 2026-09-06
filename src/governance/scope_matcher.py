@@ -1,5 +1,5 @@
-from typing import Optional, List, Tuple
-from src.models.schemas import CanonicalRule, ActionContext
+from typing import Optional, List
+from src.models.schemas import CanonicalRule
 
 def calculate_specificity_score(rule: CanonicalRule) -> int:
     """

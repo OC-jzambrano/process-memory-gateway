@@ -1,4 +1,4 @@
-from src.utils.privacy import redact_sensitive_text
+from src.utils.privacy import redact_sensitive_text, sanitize_evidence
 
 def test_redact_email():
     text = "Please send the invoice to accountant@enterprise.com for processing."
@@ -28,7 +28,6 @@ def test_clean_text_unchanged():
     assert redacted == text
 
 
-from src.utils.privacy import sanitize_evidence
 
 def test_sanitize_evidence_sensitive_keys():
     data = {

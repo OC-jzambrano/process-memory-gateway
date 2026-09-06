@@ -11,7 +11,7 @@ from src.extractor.service import ProcessMemoryExtractorService
 from src.governance.memory_retriever import MemoryRetriever
 from src.governance.task_validator import TaskValidator
 from src.integrations.base_executor import TaskExecutor
-from src.integrations.odoo17_xmlrpc import Odoo17XmlRpcExecutor, OdooAccessDeniedError, OdooExecutionError
+from src.integrations.odoo17_xmlrpc import Odoo17XmlRpcExecutor, OdooExecutionError
 from src.integrations.mock_executor import MockTaskExecutor
 from src.api.auth_context import get_current_context, AuthContextResolver
 from src.utils.privacy import sanitize_evidence

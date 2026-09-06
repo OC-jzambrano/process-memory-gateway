@@ -1,6 +1,6 @@
 from typing import Optional, List
 from src.storage.base_repository import BaseRepository
-from src.models.schemas import MemoryPack, MemoryPackRuleItem, CanonicalRule
+from src.models.schemas import MemoryPack, MemoryPackRuleItem
 from src.governance.scope_matcher import filter_and_order_rules
 
 class MemoryRetriever:
