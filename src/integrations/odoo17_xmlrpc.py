@@ -184,5 +184,4 @@ class Odoo17Connector:
             raise OdooExecutionError(f"Odoo execute_kw '{method}' failed on '{model}': {clean_msg}") from None
 
 
-# Backward compatibility alias
-Odoo17XmlRpcExecutor = Odoo17Connector
+# End of connector definitions.

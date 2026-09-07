@@ -4,6 +4,8 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
+import anyio
+
 from src.integrations.odoo17_xmlrpc import Odoo17Connector, _sanitize_error_message
 from src.models.enums import MCPTransport
 from src.models.schemas import (
@@ -94,15 +96,11 @@ class DownstreamDispatcher:
         login = None
         password = None
 
-        if server.secret_ref:
-            try:
-                parsed = json.loads(server.secret_ref)
-                if isinstance(parsed, dict):
-                    db = parsed.get("db", db)
-                    login = parsed.get("login")
-                    password = parsed.get("password") or parsed.get("api_key")
-            except (json.JSONDecodeError, TypeError, ValueError):
-                pass
+        parsed = self._load_secret(server.secret_ref or "")
+        if isinstance(parsed, dict):
+            db = parsed.get("db") or parsed.get("database") or parsed.get("ODOO_DB") or db
+            login = parsed.get("login") or parsed.get("username") or parsed.get("ODOO_LOGIN")
+            password = parsed.get("password") or parsed.get("api_key") or parsed.get("ODOO_PASSWORD") or parsed.get("ODOO_API_KEY")
 
         if not login or not password:
             # Check company odoo connection configuration if present
@@ -115,6 +113,63 @@ class DownstreamDispatcher:
             db=db,
             username=login or "",
             password=password or "",
+        )
+
+    @staticmethod
+    def _load_secret(secret_ref: str) -> dict[str, Any] | None:
+        """Resolve an AWS Secrets Manager ARN without exposing secret contents."""
+        if not secret_ref:
+            return None
+        try:
+            if secret_ref.startswith("arn:"):
+                import boto3
+
+                value = boto3.client("secretsmanager").get_secret_value(
+                    SecretId=secret_ref
+                ).get("SecretString")
+            else:
+                value = secret_ref
+            parsed = json.loads(value) if value else None
+            return parsed if isinstance(parsed, dict) else None
+        except Exception as exc:  # noqa: BLE001 - boundary converts secret failures
+            logger.error("Downstream secret resolution failed: %s", _sanitize_error_message(str(exc)))
+            return None
+
+    @staticmethod
+    async def _call_streamable_http(
+        endpoint: str,
+        tool_name: str,
+        arguments: dict[str, Any],
+        headers: dict[str, str] | None = None,
+    ) -> Any:
+        from mcp import ClientSession
+        from mcp.client.streamable_http import streamable_http_client
+
+        async with streamable_http_client(endpoint, headers=headers or {}) as streams, ClientSession(streams[0], streams[1]) as session:
+                await session.initialize()
+                result = await session.call_tool(tool_name, arguments=arguments)
+                if getattr(result, "isError", False):
+                    raise RuntimeError(f"Downstream MCP tool '{tool_name}' returned an error")
+                if getattr(result, "structuredContent", None) is not None:
+                    return result.structuredContent
+                content = getattr(result, "content", [])
+                return [item.model_dump() if hasattr(item, "model_dump") else str(item) for item in content]
+
+    def _dispatch_streamable_http(
+        self, server: DownstreamMCPServer, tool_name: str, arguments: dict[str, Any]
+    ) -> Any:
+        secret = self._load_secret(server.secret_ref or "")
+        headers = secret.get("headers", {}) if isinstance(secret, dict) else {}
+        if isinstance(secret, dict):
+            token = secret.get("access_token") or secret.get("token")
+            if token:
+                headers = {**headers, "Authorization": f"Bearer {token}"}
+        return anyio.run(
+            self._call_streamable_http,
+            server.endpoint,
+            tool_name,
+            arguments,
+            headers,
         )
 
     def dispatch(
@@ -192,15 +247,14 @@ class DownstreamDispatcher:
                     metadata={"transport": "internal_mock"},
                 )
             elif transport == MCPTransport.STREAMABLE_HTTP:
-                # HTTP MCP invocation stub/client
-                result = {"status": "dispatched", "endpoint": server.endpoint, "tool": tool_name}
+                result = self._dispatch_streamable_http(server, tool_name, arguments)
                 return OrchestrationResult(
                     success=True,
                     correlation_id=cid,
                     server_id=server_id,
                     tool_name=tool_name,
                     result=result,
-                    metadata={"transport": "streamable_http"},
+                    metadata={"transport": "streamable_http", "endpoint": server.endpoint},
                 )
             else:
                 return OrchestrationResult(

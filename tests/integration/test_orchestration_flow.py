@@ -2,9 +2,17 @@ import pytest
 
 from src.api.auth_context import RequestContext, set_current_context
 from src.api.service import HostedProcessMemoryService
-from src.models.enums import CompanyStatus, MembershipStatus, RoleType
+from src.models.enums import (
+    CompanyStatus,
+    EnforcementMode,
+    MembershipStatus,
+    RoleType,
+    RuleType,
+    Severity,
+)
 from src.models.schemas import (
     ActionContext,
+    CanonicalRule,
     Company,
     Membership,
     OrchestrationToolCall,
@@ -29,8 +37,11 @@ def multi_tenant_setup(tmp_path):
     repo.upsert_membership(Membership(membership_id="m_beta", company_id="co_beta", user_id="user_beta", role=RoleType.OWNER, status=MembershipStatus.ACTIVE))
 
     # Intercept orchestrator with deterministic mock
+    observed_rule_ids = []
+
     def mock_synthesize(**kwargs):
         rules = kwargs.get("approved_rules", [])
+        observed_rule_ids.extend(r.rule_id for r in rules)
         user_req = kwargs.get("user_request", "")
         # Emulate model adhering to rule: prefix with [ENG] if rule exists
         name = f"[ENG] {user_req}" if rules else user_req
@@ -42,7 +53,7 @@ def multi_tenant_setup(tmp_path):
 
     orchestrator = BedrockOrchestrator(mock_handler=mock_synthesize)
     service = HostedProcessMemoryService(repo=repo, orchestrator=orchestrator)
-    return service, repo
+    return service, repo, observed_rule_ids
 
 
 def test_full_orchestration_lifecycle_with_memory_enforcement(multi_tenant_setup):
@@ -53,7 +64,7 @@ def test_full_orchestration_lifecycle_with_memory_enforcement(multi_tenant_setup
     3. Register downstream MCP server
     4. Run downstream request -> synthesizes tool call adhering to memory, dispatches safely
     """
-    service, _repo = multi_tenant_setup
+    service, _repo, observed_rule_ids = multi_tenant_setup
 
     # Authenticate as Alpha
     set_current_context(
@@ -88,6 +99,23 @@ def test_full_orchestration_lifecycle_with_memory_enforcement(multi_tenant_setup
         assert len(context.rules) == 1
         assert context.rules[0].rule_id == reviewed.rule_id
 
+        # Unrelated approved memory must not be injected into this action.
+        _repo.create_canonical_rule(
+            CanonicalRule(
+                rule_id="rule_finance_only",
+                client_id="co_alpha",
+                process_name="general",
+                rule_text="Finance records require a controller review.",
+                rule_type=RuleType.OPERATIONAL_CONSTRAINT,
+                severity=Severity.INFO,
+                enforcement_mode=EnforcementMode.ADVISORY,
+                structured_scope=ActionContext(
+                    system="odoo", application="accounting", resource="account.move", operation="create"
+                ),
+                approved_by="user_alpha",
+            )
+        )
+
         # Step 4: Register downstream MCP server
         reg_res = service.register_downstream_mcp(
             server_id="odoo-main",
@@ -117,6 +145,7 @@ def test_full_orchestration_lifecycle_with_memory_enforcement(multi_tenant_setup
             action_context=ActionContext(system="odoo", application="project", resource="project.task", operation="create"),
         )
         assert result.success is True
+        assert observed_rule_ids == [reviewed.rule_id]
         assert result.server_id == "odoo-main"
         assert result.tool_name == "create_record"
         assert result.result["status"] == "mock_success"
@@ -132,7 +161,7 @@ def test_multi_tenant_downstream_isolation(multi_tenant_setup):
     """
     Company B cannot see, access, or call Company A's registered downstream MCP servers or memory.
     """
-    service, repo = multi_tenant_setup
+    service, repo, _observed_rule_ids = multi_tenant_setup
 
     # 1. Company A registers an internal mock MCP server
     set_current_context(RequestContext(company_id="co_alpha", company_slug="alpha", user_id="user_alpha", email="alpha@test.com", role=RoleType.OWNER))

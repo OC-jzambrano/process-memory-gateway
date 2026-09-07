@@ -7,6 +7,7 @@ from src.api.auth import AuthContextResolver
 from src.api.auth_context import get_current_context
 from src.extractor.service import ProcessMemoryExtractorService
 from src.governance.memory_retriever import MemoryRetriever
+from src.governance.scope_matcher import filter_and_order_rules
 from src.models.enums import (
     DecisionType,
     EnforcementMode,
@@ -374,11 +375,15 @@ class HostedProcessMemoryService:
             )
 
         # 2. Retrieve matching approved canonical rules
-        approved_rules = self.repo.get_active_rules(
-            client_id=ctx.company_id,
+        all_approved_rules = self.repo.get_active_rules(client_id=ctx.company_id)
+        approved_rules = filter_and_order_rules(
+            rules=all_approved_rules,
             system=scope.system,
+            application=scope.application,
             resource=scope.resource,
             operation=scope.operation,
+            fields=scope.fields,
+            process_name=None,
         )
 
         # 3. Call Bedrock Orchestrator to synthesize structured tool call

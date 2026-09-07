@@ -80,14 +80,6 @@ class RoleType(str, Enum):
     MEMBER = "member"
 
 
-class RunStatus(str, Enum):
-    RUN_STARTED = "run_started"
-    NEEDS_CLARIFICATION = "needs_clarification"
-    CREATED = "created"
-    FAILED = "failed"
-    RECONCILIATION_REQUIRED = "reconciliation_required"
-
-
 class ConstraintKind(str, Enum):
     REQUIRED_NONEMPTY_LIST = "required_nonempty_list"
     PATTERN_MATCH = "pattern_match"
@@ -105,21 +97,4 @@ class MembershipStatus(str, Enum):
     INVITED = "invited"
 
 
-class ExecutionEventType(str, Enum):
-    RUN_STARTED = "run_started"
-    EXECUTION_STARTED = "execution_started"
-    VALIDATION_FAILED = "validation_failed"
-    VALIDATION_BLOCKED = "validation_blocked"
-    TASK_CREATED = "task_created"
-    EXECUTION_FAILED = "execution_failed"
-    RECONCILIATION_FLAGGED = "reconciliation_flagged"
-    RECONCILIATION_REQUIRED = "reconciliation_required"
-    RECONCILIATION_RESOLVED = "reconciliation_resolved"
-
-
-class ExecutionPhase(str, Enum):
-    BEFORE_CREATE = "before_create"
-    CREATE_REJECTED = "create_rejected"
-    UNCERTAIN_CREATE = "uncertain_create"
-    VERIFICATION_FAILED = "verification_failed"
-    SUCCESS = "success"
+# End of enum definitions.

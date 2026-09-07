@@ -275,25 +275,6 @@ def _migrate_columns_if_needed(conn: sqlite3.Connection) -> None:
             "ALTER TABLE odoo_connections ADD COLUMN status TEXT NOT NULL DEFAULT 'active';"
         )
 
-    # Check execution_runs columns
-    run_cols = [
-        r["name"]
-        for r in cursor.execute("PRAGMA table_info(execution_runs);").fetchall()
-    ]
-    if "connection_snapshot_json" not in run_cols and len(run_cols) > 0:
-        cursor.execute(
-            "ALTER TABLE execution_runs ADD COLUMN connection_snapshot_json TEXT;"
-        )
-    if "execution_token" not in run_cols and len(run_cols) > 0:
-        cursor.execute("ALTER TABLE execution_runs ADD COLUMN execution_token TEXT;")
-    if "hash_algorithm_version" not in run_cols and len(run_cols) > 0:
-        cursor.execute(
-            "ALTER TABLE execution_runs ADD COLUMN hash_algorithm_version TEXT DEFAULT 'v2';"
-        )
-    if "error_code" not in run_cols and len(run_cols) > 0:
-        cursor.execute("ALTER TABLE execution_runs ADD COLUMN error_code TEXT;")
-
-
 def _run_migration_v2(conn: sqlite3.Connection) -> None:
     """Migration v2: registers downstream_mcp_servers and cleans up deprecated execution tables."""
     cursor = conn.cursor()
@@ -316,7 +297,7 @@ def _run_migration_v2(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_downstream_mcps_company ON downstream_mcp_servers(company_id);"
     )
 
-    # Drop triggers on deprecated execution tables and drop tables if they exist
+    # Drop deprecated execution tables from installations upgraded from v1.
     cursor.execute("DROP TRIGGER IF EXISTS trg_prevent_execution_events_update;")
     cursor.execute("DROP TRIGGER IF EXISTS trg_prevent_execution_events_delete;")
     cursor.execute("DROP TABLE IF EXISTS execution_events;")

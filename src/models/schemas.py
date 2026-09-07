@@ -8,15 +8,12 @@ from src.models.enums import (
     DecisionType,
     EnforcementMode,
     EventType,
-    ExecutionEventType,
-    ExecutionPhase,
     ExtractionMode,
     MCPTransport,
     MembershipStatus,
     RoleType,
     RuleStatus,
     RuleType,
-    RunStatus,
     Severity,
     SourceType,
 )
@@ -291,67 +288,7 @@ class OrchestrationResult(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-class TaskCreationResult(BaseModel):
-    status: RunStatus
-    run_id: str
-    correlation_id: str
-    applied_rule_ids: list[str] = Field(default_factory=list)
-    missing_information: list[str] = Field(default_factory=list)
-    odoo_task_id: int | None = None
-    odoo_task_url: str | None = None
-    task_name: str | None = None
-    error_code: str | None = None
-    message: str
-
-
-class TaskRecord(BaseModel):
-    id: int
-    name: str
-    description: str
-    project_id: int
-    project_name: str | None = None
-
-
-class CreateTaskOutcome(BaseModel):
-    phase: ExecutionPhase
-    task_id: int | None = None
-    task_record: TaskRecord | None = None
-    is_success: bool = False
-    error_code: str | None = None
-    error_detail: str | None = None
-
-
-# 10. Execution Runs & Evidence Records
-class ExecutionRunRecord(BaseModel):
-    run_id: str = Field(min_length=1)
-    company_id: str = Field(min_length=1)
-    user_id: str = Field(min_length=1)
-    correlation_id: str = Field(min_length=1)
-    action_scope: ActionContext
-    adapter_kind: str = Field(default="odoo17_xmlrpc")
-    status: RunStatus = Field(default=RunStatus.CREATED)
-    redacted_input_hash: str | None = None
-    hash_algorithm_version: str = Field(default="v2")
-    connection_snapshot: dict[str, Any] | None = None
-    execution_token: str | None = None
-    applied_rules_snapshot: list[dict[str, Any]] = Field(default_factory=list)
-    odoo_task_id: int | None = None
-    odoo_task_url: str | None = None
-    result_payload: dict[str, Any] = Field(default_factory=dict)
-    error_code: str | None = None
-    error_detail: str | None = None
-    created_at: str | None = None
-
-
-class ExecutionEventRecord(BaseModel):
-    event_id: str = Field(min_length=1)
-    run_id: str = Field(min_length=1)
-    event_type: ExecutionEventType
-    details: dict[str, Any] = Field(default_factory=dict)
-    created_at: str | None = None
-
-
-# 11. LLM Extraction Models
+# 10. LLM Extraction Models
 class ExtractedRuleItem(BaseModel):
     rule_text: str = Field(
         min_length=1, description="Imperative statement of the rule."

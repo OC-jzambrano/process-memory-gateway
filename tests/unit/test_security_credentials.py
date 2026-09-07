@@ -2,7 +2,7 @@ import inspect
 
 import pytest
 
-from src.integrations.odoo17_xmlrpc import Odoo17XmlRpcExecutor, OdooExecutionError
+from src.integrations.odoo17_xmlrpc import Odoo17Connector, OdooExecutionError
 from src.models.schemas import OdooConnectionConfig
 
 
@@ -10,30 +10,30 @@ def test_executor_construction_fails_without_credentials():
     """Executor must fail closed if any credential parameter is empty or missing."""
     with pytest.raises(TypeError):
         # Missing required positional arguments
-        Odoo17XmlRpcExecutor()
+        Odoo17Connector()
 
     with pytest.raises(ValueError, match="Odoo URL is required"):
-        Odoo17XmlRpcExecutor(url="", db="db", username="user", password="pwd")
+        Odoo17Connector(url="", db="db", username="user", password="pwd")
 
     with pytest.raises(ValueError, match="Odoo Database name is required"):
-        Odoo17XmlRpcExecutor(
+        Odoo17Connector(
             url="https://odoo.com", db="", username="user", password="pwd"
         )
 
     with pytest.raises(ValueError, match="Odoo username/login is required"):
-        Odoo17XmlRpcExecutor(
+        Odoo17Connector(
             url="https://odoo.com", db="db", username="", password="pwd"
         )
 
     with pytest.raises(ValueError, match="Odoo password or API key is required"):
-        Odoo17XmlRpcExecutor(
+        Odoo17Connector(
             url="https://odoo.com", db="db", username="user", password=""
         )
 
 
 def test_executor_init_has_no_credential_defaults():
     """Executor constructor signature must not have default values for credentials."""
-    sig = inspect.signature(Odoo17XmlRpcExecutor.__init__)
+    sig = inspect.signature(Odoo17Connector.__init__)
     for param_name in ["url", "db", "username", "password"]:
         param = sig.parameters[param_name]
         assert param.default == inspect.Parameter.empty, (
@@ -51,7 +51,7 @@ def test_odoo_connection_config_has_no_password_defaults():
 
 def test_authentication_error_redacts_credentials():
     """Authentication failure messages must not leak password or sensitive connection fragments."""
-    executor = Odoo17XmlRpcExecutor(
+    executor = Odoo17Connector(
         url="http://localhost:9999",
         db="test_db",
         username="test_user",

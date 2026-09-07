@@ -253,6 +253,73 @@ def test_dispatcher_internal_mock_execution(tmp_path):
     assert result.result["received_arguments"] == {"message": "hello world"}
 
 
+def test_dispatcher_streamable_http_invokes_client(tmp_path, monkeypatch):
+    """Streamable HTTP transport must call the registered downstream tool."""
+    repo = MemoryRepository(db_path=tmp_path / "dispatcher_http.db")
+    repo.upsert_company(Company(company_id="co_http", company_slug="co-http", name="HTTP Co"))
+    repo.upsert_downstream_mcp(
+        DownstreamMCPServer(
+            company_id="co_http",
+            server_id="srv_http",
+            endpoint="https://downstream.example/mcp",
+            transport=MCPTransport.STREAMABLE_HTTP,
+            available_tools=[
+                DownstreamToolDefinition(
+                    name="create_record",
+                    input_schema={"type": "object", "required": ["name"]},
+                )
+            ],
+        )
+    )
+
+    called = {}
+
+    def fake_dispatch(server, tool_name, arguments):
+        called.update(server=server.server_id, tool=tool_name, arguments=arguments)
+        return {"id": 42}
+
+    dispatcher = DownstreamDispatcher(repo=repo)
+    monkeypatch.setattr(dispatcher, "_dispatch_streamable_http", fake_dispatch)
+    result = dispatcher.dispatch(
+        "co_http",
+        OrchestrationToolCall(
+            server_id="srv_http", tool_name="create_record", arguments={"name": "x"}
+        ),
+    )
+
+    assert result.success is True
+    assert result.result == {"id": 42}
+    assert called == {"server": "srv_http", "tool": "create_record", "arguments": {"name": "x"}}
+
+
+def test_dispatcher_resolves_aws_secret_for_odoo(tmp_path, monkeypatch):
+    """Odoo connector configuration can use a Secrets Manager ARN."""
+    repo = MemoryRepository(db_path=tmp_path / "dispatcher_secret.db")
+    repo.upsert_company(Company(company_id="co_secret", company_slug="co-secret", name="Secret Co"))
+    repo.upsert_downstream_mcp(
+        DownstreamMCPServer(
+            company_id="co_secret",
+            server_id="odoo",
+            endpoint="https://odoo.example",
+            transport=MCPTransport.ODOO_XMLRPC,
+            secret_ref="arn:aws:secretsmanager:eu-north-1:123:secret:odoo",
+            available_tools=[DownstreamToolDefinition(name="create_record", input_schema={"type": "object"})],
+        )
+    )
+
+    class FakeSecrets:
+        def get_secret_value(self, SecretId):
+            assert SecretId.endswith(":odoo")
+            return {"SecretString": '{"database":"db1","username":"u1","password":"p1"}'}
+
+    monkeypatch.setattr("boto3.client", lambda service: FakeSecrets())
+    dispatcher = DownstreamDispatcher(repo=repo)
+    connector = dispatcher._resolve_odoo_connector(repo.get_downstream_mcp("co_secret", "odoo"))
+    assert connector.db == "db1"
+    assert connector.username == "u1"
+    assert connector.password == "p1"
+
+
 def test_bedrock_orchestrator_mock_handler():
     """BedrockOrchestrator invokes mock handler offline when provided."""
     expected_call = OrchestrationToolCall(
