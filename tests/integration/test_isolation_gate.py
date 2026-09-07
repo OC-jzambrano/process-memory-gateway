@@ -1,5 +1,6 @@
-from src.models.schemas import ExtractionSession, CandidateRule
-from src.models.enums import RuleStatus, RuleType, Severity, EnforcementMode
+from src.models.enums import EnforcementMode, RuleStatus, RuleType, Severity
+from src.models.schemas import CandidateRule, ExtractionSession
+
 
 def test_pending_candidates_are_strictly_isolated(repo):
     """
@@ -12,7 +13,7 @@ def test_pending_candidates_are_strictly_isolated(repo):
         process_name="mrp_setup",
         interaction_text="Never install MRP without lead approval.",
         model_id="test-model",
-        candidates_extracted=1
+        candidates_extracted=1,
     )
     repo.create_session(session)
 
@@ -27,7 +28,7 @@ def test_pending_candidates_are_strictly_isolated(repo):
         enforcement_mode=EnforcementMode.BLOCKING,
         source_quote="Never install MRP without lead approval.",
         confidence=0.98,
-        status=RuleStatus.PENDING_REVIEW
+        status=RuleStatus.PENDING_REVIEW,
     )
     repo.save_candidates([candidate])
 
@@ -38,4 +39,6 @@ def test_pending_candidates_are_strictly_isolated(repo):
 
     # 2. Active rules MUST be empty
     active_rules = repo.get_active_rules("test_client", process_name="mrp_setup")
-    assert len(active_rules) == 0, "Security Failure: Pending candidate was leaked into active rules!"
+    assert len(active_rules) == 0, (
+        "Security Failure: Pending candidate was leaked into active rules!"
+    )

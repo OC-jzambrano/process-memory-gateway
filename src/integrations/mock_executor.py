@@ -1,9 +1,10 @@
 import html
-from typing import Optional, List, Dict
+
 from src.integrations.base_executor import TaskExecutor
 from src.integrations.odoo17_xmlrpc import OdooAccessDeniedError, OdooExecutionError
-from src.models.schemas import TaskRecord, CreateTaskOutcome
 from src.models.enums import ExecutionPhase
+from src.models.schemas import CreateTaskOutcome, TaskRecord
+
 
 class MockTaskExecutor(TaskExecutor):
     """
@@ -13,13 +14,13 @@ class MockTaskExecutor(TaskExecutor):
 
     def __init__(self, default_project_id: int = 142):
         self.default_project_id = default_project_id
-        self.tasks: Dict[int, TaskRecord] = {}
+        self.tasks: dict[int, TaskRecord] = {}
         self._next_id = 1001
         self.simulate_access_error = False
         self.simulate_timeout = False
-        self.failure_phase: Optional[ExecutionPhase] = None
-        self.failure_code: Optional[str] = None
-        self.failure_detail: Optional[str] = None
+        self.failure_phase: ExecutionPhase | None = None
+        self.failure_code: str | None = None
+        self.failure_detail: str | None = None
 
     def healthcheck(self) -> bool:
         return not self.simulate_access_error and not self.simulate_timeout
@@ -28,94 +29,106 @@ class MockTaskExecutor(TaskExecutor):
         self,
         title: str,
         description: str,
-        definition_of_done: Optional[List[str]] = None,
-        project_id: Optional[int] = None
+        definition_of_done: list[str] | None = None,
+        project_id: int | None = None,
     ) -> CreateTaskOutcome:
         if "create_project_task" in self.__dict__:
             try:
                 fn = self.__dict__["create_project_task"]
-                res = fn(title=title, description=description, definition_of_done=definition_of_done, project_id=project_id)
+                res = fn(
+                    title=title,
+                    description=description,
+                    definition_of_done=definition_of_done,
+                    project_id=project_id,
+                )
                 if isinstance(res, TaskRecord):
                     return CreateTaskOutcome(
                         phase=ExecutionPhase.SUCCESS,
                         task_id=res.id,
                         task_record=res,
-                        is_success=True
+                        is_success=True,
                     )
             except OdooAccessDeniedError as e:
                 return CreateTaskOutcome(
                     phase=ExecutionPhase.CREATE_REJECTED,
                     error_code="access_denied",
-                    error_detail=str(e)
+                    error_detail=str(e),
                 )
             except TimeoutError as e:
                 return CreateTaskOutcome(
                     phase=ExecutionPhase.UNCERTAIN_CREATE,
                     error_code="timeout",
-                    error_detail=str(e)
+                    error_detail=str(e),
                 )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - Boundary converts arbitrary provider failures to controlled outcomes.
                 if "timed out" in str(e).lower():
                     return CreateTaskOutcome(
                         phase=ExecutionPhase.UNCERTAIN_CREATE,
                         error_code="timeout",
-                        error_detail=str(e)
+                        error_detail=str(e),
                     )
                 return CreateTaskOutcome(
                     phase=ExecutionPhase.CREATE_REJECTED,
                     error_code="exception",
-                    error_detail=str(e)
+                    error_detail=str(e),
                 )
 
         if self.simulate_access_error:
             return CreateTaskOutcome(
                 phase=ExecutionPhase.CREATE_REJECTED,
                 error_code="access_denied",
-                error_detail="Odoo Access Denied: User lacks permission to create tasks on project.task."
+                error_detail="Odoo Access Denied: User lacks permission to create tasks on project.task.",
             )
         if self.simulate_timeout:
             return CreateTaskOutcome(
                 phase=ExecutionPhase.UNCERTAIN_CREATE,
                 error_code="timeout",
-                error_detail="Odoo XML-RPC request timed out after 15000ms."
+                error_detail="Odoo XML-RPC request timed out after 15000ms.",
             )
 
         if self.failure_phase == ExecutionPhase.BEFORE_CREATE:
             return CreateTaskOutcome(
                 phase=ExecutionPhase.BEFORE_CREATE,
                 error_code=self.failure_code or "before_create_failed",
-                error_detail=self.failure_detail or "Simulated before_create failure."
+                error_detail=self.failure_detail or "Simulated before_create failure.",
             )
 
         if self.failure_phase == ExecutionPhase.CREATE_REJECTED:
             return CreateTaskOutcome(
                 phase=ExecutionPhase.CREATE_REJECTED,
                 error_code=self.failure_code or "create_rejected",
-                error_detail=self.failure_detail or "Simulated create rejection."
+                error_detail=self.failure_detail or "Simulated create rejection.",
             )
 
         if self.failure_phase == ExecutionPhase.UNCERTAIN_CREATE:
             return CreateTaskOutcome(
                 phase=ExecutionPhase.UNCERTAIN_CREATE,
                 error_code=self.failure_code or "uncertain_create",
-                error_detail=self.failure_detail or "Simulated network timeout during create."
+                error_detail=self.failure_detail
+                or "Simulated network timeout during create.",
             )
 
-        target_project_id = project_id if project_id is not None else self.default_project_id
+        target_project_id = (
+            project_id if project_id is not None else self.default_project_id
+        )
         task_id = self._next_id
         self._next_id += 1
 
         escaped_desc = html.escape(description)
         html_content = f"<p>{escaped_desc}</p>"
         if definition_of_done:
-            html_content += "<ul>" + "".join([f"<li>{html.escape(d)}</li>" for d in definition_of_done]) + "</ul>"
+            html_content += (
+                "<ul>"
+                + "".join([f"<li>{html.escape(d)}</li>" for d in definition_of_done])
+                + "</ul>"
+            )
 
         task = TaskRecord(
             id=task_id,
             name=title.strip(),
             description=html_content,
             project_id=target_project_id,
-            project_name="IH/AI/Odoo Tutor"
+            project_name="IH/AI/Odoo Tutor",
         )
         self.tasks[task_id] = task
 
@@ -124,28 +137,29 @@ class MockTaskExecutor(TaskExecutor):
                 phase=ExecutionPhase.VERIFICATION_FAILED,
                 task_id=task_id,
                 error_code=self.failure_code or "verification_failed",
-                error_detail=self.failure_detail or f"Simulated verification failure for task #{task_id}."
+                error_detail=self.failure_detail
+                or f"Simulated verification failure for task #{task_id}.",
             )
 
         return CreateTaskOutcome(
             phase=ExecutionPhase.SUCCESS,
             task_id=task_id,
             task_record=task,
-            is_success=True
+            is_success=True,
         )
 
     def create_project_task(
         self,
         title: str,
         description: str,
-        definition_of_done: Optional[List[str]] = None,
-        project_id: Optional[int] = None
+        definition_of_done: list[str] | None = None,
+        project_id: int | None = None,
     ) -> TaskRecord:
         outcome = self.create_project_task_phase_aware(
             title=title,
             description=description,
             definition_of_done=definition_of_done,
-            project_id=project_id
+            project_id=project_id,
         )
         if outcome.is_success and outcome.task_record:
             return outcome.task_record
@@ -154,8 +168,9 @@ class MockTaskExecutor(TaskExecutor):
             raise OdooAccessDeniedError(outcome.error_detail or "Access denied")
         if outcome.error_code == "timeout":
             raise TimeoutError(outcome.error_detail or "Request timed out")
-        raise OdooExecutionError(outcome.error_detail or f"Task creation failed at phase {outcome.phase}")
+        raise OdooExecutionError(
+            outcome.error_detail or f"Task creation failed at phase {outcome.phase}"
+        )
 
-    def get_project_task(self, task_id: int) -> Optional[TaskRecord]:
+    def get_project_task(self, task_id: int) -> TaskRecord | None:
         return self.tasks.get(task_id)
-

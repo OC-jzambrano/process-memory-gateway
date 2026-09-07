@@ -1,7 +1,7 @@
-from typing import Optional, List
-from src.storage.base_repository import BaseRepository
-from src.models.schemas import MemoryPack, MemoryPackRuleItem
 from src.governance.scope_matcher import filter_and_order_rules
+from src.models.schemas import MemoryPack, MemoryPackRuleItem
+from src.storage.base_repository import BaseRepository
+
 
 class MemoryRetriever:
     """
@@ -20,11 +20,11 @@ class MemoryRetriever:
         company_id: str,
         company_slug: str,
         system: str = "odoo",
-        application: Optional[str] = None,
-        resource: Optional[str] = None,
-        operation: Optional[str] = None,
-        fields: Optional[List[str]] = None,
-        token_budget: int = 1500
+        application: str | None = None,
+        resource: str | None = None,
+        operation: str | None = None,
+        fields: list[str] | None = None,
+        token_budget: int = 1500,
     ) -> MemoryPack:
         fields = fields or []
         # 1. Fetch all active canonical rules for company
@@ -38,7 +38,7 @@ class MemoryRetriever:
                 operation=operation,
                 rules=[],
                 token_budget_used=0,
-                message="No active company instructions found for this scope."
+                message="No active company instructions found for this scope.",
             )
 
         # 2. Filter and order using deterministic scope matcher
@@ -48,10 +48,10 @@ class MemoryRetriever:
             application=application,
             resource=resource,
             operation=operation,
-            fields=fields
+            fields=fields,
         )
 
-        final_rule_items: List[MemoryPackRuleItem] = []
+        final_rule_items: list[MemoryPackRuleItem] = []
         approx_tokens = 0
         omitted_count = 0
 
@@ -71,7 +71,7 @@ class MemoryRetriever:
                     rule_type=r.rule_type,
                     enforcement_mode=r.enforcement_mode,
                     scope=r.structured_scope,
-                    constraint=r.structured_constraint
+                    constraint=r.structured_constraint,
                 )
             )
 
@@ -90,6 +90,5 @@ class MemoryRetriever:
             operation=operation,
             rules=final_rule_items,
             token_budget_used=approx_tokens,
-            message=msg
+            message=msg,
         )
-

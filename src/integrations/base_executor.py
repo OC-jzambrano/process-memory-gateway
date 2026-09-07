@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
-from typing import Optional, List
-from src.models.schemas import TaskRecord, CreateTaskOutcome
+
+from src.models.schemas import CreateTaskOutcome, TaskRecord
+
 
 class TaskExecutor(ABC):
     """
@@ -17,8 +18,8 @@ class TaskExecutor(ABC):
         self,
         title: str,
         description: str,
-        definition_of_done: Optional[List[str]] = None,
-        project_id: Optional[int] = None
+        definition_of_done: list[str] | None = None,
+        project_id: int | None = None,
     ) -> TaskRecord:
         """
         Creates a project.task record with safe HTML rendering and read-back verification.
@@ -30,8 +31,8 @@ class TaskExecutor(ABC):
         self,
         title: str,
         description: str,
-        definition_of_done: Optional[List[str]] = None,
-        project_id: Optional[int] = None
+        definition_of_done: list[str] | None = None,
+        project_id: int | None = None,
     ) -> CreateTaskOutcome:
         """
         Creates a task and returns a typed outcome capturing phase-specific states.
@@ -39,9 +40,8 @@ class TaskExecutor(ABC):
         ...
 
     @abstractmethod
-    def get_project_task(self, task_id: int) -> Optional[TaskRecord]:
+    def get_project_task(self, task_id: int) -> TaskRecord | None:
         """
         Reads back an existing task by ID to verify record integrity.
         """
         ...
-

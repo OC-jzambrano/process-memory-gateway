@@ -1,43 +1,45 @@
 import json
 import logging
-from typing import Optional, List, Dict, Any, Literal
+from typing import Any, Literal
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
+
 from src.config import ALLOWED_HOSTS
-from src.models.schemas import (
-    ActionContext
-)
+from src.models.schemas import ActionContext
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "remember_company_instruction",
-    "list_memory_candidates",
-    "review_memory_candidate",
-    "get_company_context",
-    "create_project_task",
     "create_mcp_server",
-    "register_tools",
-    "get_default_service",
+    "create_project_task",
+    "get_company_context",
     "get_default_server",
+    "get_default_service",
+    "list_memory_candidates",
+    "register_tools",
+    "remember_company_instruction",
+    "review_memory_candidate",
 ]
 
 # Lazy runtime dependencies - deferred to avoid initializing database/Odoo at import time
 _default_service = None
 _default_server = None
 
+
 def get_default_service():
     """Lazily initializes the production HostedProcessMemoryService on first runtime use."""
     global _default_service
     if _default_service is None:
-        from src.storage.repository import MemoryRepository
-        from src.extractor.service import ProcessMemoryExtractorService
         from src.api.service import HostedProcessMemoryService
+        from src.extractor.service import ProcessMemoryExtractorService
+        from src.storage.repository import MemoryRepository
+
         repo = MemoryRepository()
         extractor = ProcessMemoryExtractorService()
         _default_service = HostedProcessMemoryService(repo=repo, extractor=extractor)
     return _default_service
+
 
 def register_tools(mcp_app: FastMCP, service: Any) -> None:
     """
@@ -48,8 +50,7 @@ def register_tools(mcp_app: FastMCP, service: Any) -> None:
     # --- TOOL 1: REMEMBER COMPANY INSTRUCTION ---
     @mcp_app.tool()
     def remember_company_instruction(
-        instruction_text: str,
-        context_hint: Optional[Dict[str, Any]] = None
+        instruction_text: str, context_hint: dict[str, Any] | None = None
     ) -> str:
         """
         Stages a proposed company instruction or business rule into memory_candidates (pending_review).
@@ -64,16 +65,13 @@ def register_tools(mcp_app: FastMCP, service: Any) -> None:
         """
         scope = ActionContext(**context_hint) if context_hint else None
         result = service.remember_company_instruction(
-            instruction_text=instruction_text,
-            context_hint=scope
+            instruction_text=instruction_text, context_hint=scope
         )
         return result.model_dump_json(indent=2)
 
     # --- TOOL 2: LIST MEMORY CANDIDATES ---
     @mcp_app.tool()
-    def list_memory_candidates(
-        status: str = "pending_review"
-    ) -> str:
+    def list_memory_candidates(status: str = "pending_review") -> str:
         """
         Lists staged memory candidates for the authenticated company awaiting human review.
 
@@ -91,10 +89,10 @@ def register_tools(mcp_app: FastMCP, service: Any) -> None:
     def review_memory_candidate(
         candidate_id: str,
         decision: Literal["approve", "edit", "reject"],
-        edited_rule_text: Optional[str] = None,
-        edited_scope: Optional[Dict[str, Any]] = None,
-        edited_constraint: Optional[Dict[str, Any]] = None,
-        notes: Optional[str] = None
+        edited_rule_text: str | None = None,
+        edited_scope: dict[str, Any] | None = None,
+        edited_constraint: dict[str, Any] | None = None,
+        notes: str | None = None,
     ) -> str:
         """
         Processes human sign-off on a staged memory candidate.
@@ -118,7 +116,7 @@ def register_tools(mcp_app: FastMCP, service: Any) -> None:
             edited_rule_text=edited_rule_text,
             edited_scope=scope,
             edited_constraint=edited_constraint,
-            notes=notes
+            notes=notes,
         )
         return result.model_dump_json(indent=2)
 
@@ -126,10 +124,10 @@ def register_tools(mcp_app: FastMCP, service: Any) -> None:
     @mcp_app.tool()
     def get_company_context(
         system: str = "odoo",
-        application: Optional[str] = None,
-        resource: Optional[str] = None,
-        operation: Optional[str] = None,
-        fields: Optional[List[str]] = None
+        application: str | None = None,
+        resource: str | None = None,
+        operation: str | None = None,
+        fields: list[str] | None = None,
     ) -> str:
         """
         Retrieves a small, relevant Memory Pack of active canonical rules for the authenticated company.
@@ -149,7 +147,7 @@ def register_tools(mcp_app: FastMCP, service: Any) -> None:
             application=application,
             resource=resource,
             operation=operation,
-            fields=fields
+            fields=fields,
         )
         return pack.model_dump_json(indent=2)
 
@@ -158,9 +156,9 @@ def register_tools(mcp_app: FastMCP, service: Any) -> None:
     def create_project_task(
         title: str,
         description: str,
-        definition_of_done: Optional[List[str]] = None,
-        project_id: Optional[int] = None,
-        correlation_id: Optional[str] = None
+        definition_of_done: list[str] | None = None,
+        project_id: int | None = None,
+        correlation_id: str | None = None,
     ) -> str:
         """
         Managed Odoo Task Creation Tool.
@@ -182,11 +180,12 @@ def register_tools(mcp_app: FastMCP, service: Any) -> None:
             description=description,
             definition_of_done=definition_of_done,
             project_id=project_id,
-            correlation_id=correlation_id
+            correlation_id=correlation_id,
         )
         return result.model_dump_json(indent=2)
 
-def create_mcp_server(service: Optional[Any] = None) -> FastMCP:
+
+def create_mcp_server(service: Any | None = None) -> FastMCP:
     """
     Factory constructing a FastMCP server with the five approved tools registered.
     Accepts an injected service instance (production HostedProcessMemoryService or Fake for tests).
@@ -197,12 +196,12 @@ def create_mcp_server(service: Optional[Any] = None) -> FastMCP:
         dependencies=["pydantic", "fastmcp"],
         stateless_http=True,
         transport_security=TransportSecuritySettings(
-            enable_dns_rebinding_protection=True,
-            allowed_hosts=ALLOWED_HOSTS
-        )
+            enable_dns_rebinding_protection=True, allowed_hosts=ALLOWED_HOSTS
+        ),
     )
     register_tools(mcp_app, svc)
     return mcp_app
+
 
 def get_default_server() -> FastMCP:
     """Returns the default lazily initialized FastMCP server instance."""
@@ -211,31 +210,30 @@ def get_default_server() -> FastMCP:
         _default_server = create_mcp_server()
     return _default_server
 
+
 # Module-level callable wrappers delegating to default service for direct Python calls
 def remember_company_instruction(
-    instruction_text: str,
-    context_hint: Optional[Dict[str, Any]] = None
+    instruction_text: str, context_hint: dict[str, Any] | None = None
 ) -> str:
     scope = ActionContext(**context_hint) if context_hint else None
     result = get_default_service().remember_company_instruction(
-        instruction_text=instruction_text,
-        context_hint=scope
+        instruction_text=instruction_text, context_hint=scope
     )
     return result.model_dump_json(indent=2)
 
-def list_memory_candidates(
-    status: str = "pending_review"
-) -> str:
+
+def list_memory_candidates(status: str = "pending_review") -> str:
     candidates = get_default_service().list_memory_candidates(status=status)
     return json.dumps([c.model_dump() for c in candidates], indent=2)
+
 
 def review_memory_candidate(
     candidate_id: str,
     decision: Literal["approve", "edit", "reject"],
-    edited_rule_text: Optional[str] = None,
-    edited_scope: Optional[Dict[str, Any]] = None,
-    edited_constraint: Optional[Dict[str, Any]] = None,
-    notes: Optional[str] = None
+    edited_rule_text: str | None = None,
+    edited_scope: dict[str, Any] | None = None,
+    edited_constraint: dict[str, Any] | None = None,
+    notes: str | None = None,
 ) -> str:
     scope = ActionContext(**edited_scope) if edited_scope else None
     result = get_default_service().review_memory_candidate(
@@ -244,41 +242,44 @@ def review_memory_candidate(
         edited_rule_text=edited_rule_text,
         edited_scope=scope,
         edited_constraint=edited_constraint,
-        notes=notes
+        notes=notes,
     )
     return result.model_dump_json(indent=2)
 
+
 def get_company_context(
     system: str = "odoo",
-    application: Optional[str] = None,
-    resource: Optional[str] = None,
-    operation: Optional[str] = None,
-    fields: Optional[List[str]] = None
+    application: str | None = None,
+    resource: str | None = None,
+    operation: str | None = None,
+    fields: list[str] | None = None,
 ) -> str:
     pack = get_default_service().get_company_context(
         system=system,
         application=application,
         resource=resource,
         operation=operation,
-        fields=fields
+        fields=fields,
     )
     return pack.model_dump_json(indent=2)
+
 
 def create_project_task(
     title: str,
     description: str,
-    definition_of_done: Optional[List[str]] = None,
-    project_id: Optional[int] = None,
-    correlation_id: Optional[str] = None
+    definition_of_done: list[str] | None = None,
+    project_id: int | None = None,
+    correlation_id: str | None = None,
 ) -> str:
     result = get_default_service().create_project_task(
         title=title,
         description=description,
         definition_of_done=definition_of_done,
         project_id=project_id,
-        correlation_id=correlation_id
+        correlation_id=correlation_id,
     )
     return result.model_dump_json(indent=2)
+
 
 def __getattr__(name: str):
     if name == "mcp":
@@ -286,6 +287,7 @@ def __getattr__(name: str):
     if name == "service":
         return get_default_service()
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
+
 
 if __name__ == "__main__":
     get_default_server().run()

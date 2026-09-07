@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from src.api.memory_tools import ProcessMemoryTools
 from src.models.schemas import Principal
 
+
 def live_chat_cli():
     tools = ProcessMemoryTools()
     client_id = "odooconcept_demo"
@@ -34,7 +35,7 @@ def live_chat_cli():
                 interaction_text=user_input,
                 client_id=client_id,
                 process_name=process_name,
-                principal=principal
+                principal=principal,
             )
 
             print(f"\n[Extraction Mode: {result.extraction_mode.value.upper()}]")
@@ -42,14 +43,18 @@ def live_chat_cli():
             print(f"Candidate Rules Found: {len(result.candidates)}")
 
             if not result.candidates:
-                print("  No operational business rules detected (filtered out as general conversation / noise).")
+                print(
+                    "  No operational business rules detected (filtered out as general conversation / noise)."
+                )
             else:
                 for idx, c in enumerate(result.candidates, 1):
                     print(f"\n  Candidate #{idx} [ID: {c.candidate_id[:16]}...]:")
                     print(f"    • Inferred Rule:   {c.rule_text}")
                     print(f"    • Category:        {c.rule_type.value}")
-                    print(f"    • Severity:        {c.severity.value} (Enforcement: {c.enforcement_mode.value})")
-                    print(f"    • Source Quote:    \"{c.source_quote}\"")
+                    print(
+                        f"    • Severity:        {c.severity.value} (Enforcement: {c.enforcement_mode.value})"
+                    )
+                    print(f'    • Source Quote:    "{c.source_quote}"')
                     print(f"    • AI Confidence:   {c.confidence * 100:.1f}%")
                     print(f"    • Initial Status:  {c.status.value}")
 
@@ -58,8 +63,9 @@ def live_chat_cli():
         except KeyboardInterrupt:
             print("\nInterrupted. Exiting.")
             break
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - Boundary converts arbitrary provider failures to controlled outcomes.
             print(f"\n[Error]: {e}")
+
 
 if __name__ == "__main__":
     live_chat_cli()

@@ -1,43 +1,39 @@
-from typing import List, Optional, Union
-
+from src.extractor.service import BedrockExtractorService
+from src.models.enums import DecisionType, RuleStatus, SourceType
 from src.models.schemas import (
-    Client,
     CandidateRule,
     CanonicalRule,
+    Client,
     ExtractionResult,
     ExtractionSession,
-    Principal
-)
-from src.models.enums import (
-    RuleStatus,
-    DecisionType,
-    SourceType
+    Principal,
 )
 from src.storage.repository import MemoryRepository
-from src.extractor.service import BedrockExtractorService
+
 
 class ProcessMemoryTools:
     """
     Core MCP-compatible toolset for Process Memory capture, governance, and retrieval.
     Enforces tenant authorization and immutable state transitions.
     """
+
     def __init__(
         self,
-        repo: Optional[MemoryRepository] = None,
-        extractor: Optional[BedrockExtractorService] = None
+        repo: MemoryRepository | None = None,
+        extractor: BedrockExtractorService | None = None,
     ):
         self.repo = repo or MemoryRepository()
         self.extractor = extractor or BedrockExtractorService()
 
     def _resolve_principal(
-        self,
-        client_id: Optional[str] = None,
-        principal: Optional[Union[Principal, str]] = None
+        self, client_id: str | None = None, principal: Principal | str | None = None
     ) -> Principal:
         """Resolves and validates the security principal and tenant ID."""
         if isinstance(principal, Principal):
             if client_id and principal.client_id != client_id:
-                raise PermissionError(f"Cross-tenant access forbidden: principal is '{principal.client_id}', requested '{client_id}'.")
+                raise PermissionError(
+                    f"Cross-tenant access forbidden: principal is '{principal.client_id}', requested '{client_id}'."
+                )
             return principal
         elif isinstance(principal, str):
             tid = client_id or principal
@@ -45,7 +41,9 @@ class ProcessMemoryTools:
         elif client_id:
             return Principal(client_id=client_id, user_id="system_user")
         else:
-            raise ValueError("Either client_id or an authenticated Principal must be provided.")
+            raise ValueError(
+                "Either client_id or an authenticated Principal must be provided."
+            )
 
     # --- TOOL 1: Extract Memory Candidates from Conversation ---
     def extract_memory_candidates(
@@ -54,10 +52,10 @@ class ProcessMemoryTools:
         client_id: str,
         process_name: str = "general",
         source_type: SourceType = SourceType.USER_INTERACTION,
-        principal: Optional[Union[Principal, str]] = None
+        principal: Principal | str | None = None,
     ) -> ExtractionResult:
         """
-        Analyzes conversational dialogue, infers candidate business rules, 
+        Analyzes conversational dialogue, infers candidate business rules,
         persists extraction session provenance, and saves candidates in 'pending_review' status.
         """
         resolved = self._resolve_principal(client_id=client_id, principal=principal)
@@ -65,13 +63,15 @@ class ProcessMemoryTools:
 
         # Auto-register client if first interaction
         if not self.repo.get_client(effective_client_id):
-            self.repo.upsert_client(Client(client_id=effective_client_id, client_name=effective_client_id))
+            self.repo.upsert_client(
+                Client(client_id=effective_client_id, client_name=effective_client_id)
+            )
 
         result = self.extractor.extract_from_text(
             interaction_text=interaction_text,
             client_id=effective_client_id,
             process_name=process_name,
-            source_type=source_type
+            source_type=source_type,
         )
 
         # 1. Record provenance session in DB
@@ -82,7 +82,7 @@ class ProcessMemoryTools:
             source_type=source_type,
             interaction_text=interaction_text,
             model_id=self.extractor.model_id,
-            candidates_extracted=len(result.candidates)
+            candidates_extracted=len(result.candidates),
         )
         self.repo.create_session(session)
 
@@ -96,31 +96,29 @@ class ProcessMemoryTools:
     def get_candidate_rules(
         self,
         client_id: str,
-        status: Optional[RuleStatus] = RuleStatus.PENDING_REVIEW,
-        process_name: Optional[str] = None,
-        principal: Optional[Union[Principal, str]] = None
-    ) -> List[CandidateRule]:
+        status: RuleStatus | None = RuleStatus.PENDING_REVIEW,
+        process_name: str | None = None,
+        principal: Principal | str | None = None,
+    ) -> list[CandidateRule]:
         """
         Retrieves candidate rules awaiting human review for a given client/tenant.
         """
         resolved = self._resolve_principal(client_id=client_id, principal=principal)
         return self.repo.list_candidates(
-            client_id=resolved.client_id,
-            status=status,
-            process_name=process_name
+            client_id=resolved.client_id, status=status, process_name=process_name
         )
 
     # --- TOOL 3: Review Candidate Rule (Approve / Reject / Edit) ---
     def review_candidate_rule(
         self,
         candidate_id: str,
-        decision: Union[DecisionType, str],
+        decision: DecisionType | str,
         reviewer: str,
-        client_id: Optional[str] = None,
-        edited_rule_text: Optional[str] = None,
-        notes: Optional[str] = None,
-        principal: Optional[Union[Principal, str]] = None
-    ) -> Optional[CanonicalRule]:
+        client_id: str | None = None,
+        edited_rule_text: str | None = None,
+        notes: str | None = None,
+        principal: Principal | str | None = None,
+    ) -> CanonicalRule | None:
         """
         Processes human sign-off on a candidate rule:
         - 'approve': Promotes candidate to active canonical rule (version 1).
@@ -144,22 +142,21 @@ class ProcessMemoryTools:
             reviewer=reviewer,
             client_id=resolved_client_id,
             edited_rule_text=edited_rule_text,
-            notes=notes
+            notes=notes,
         )
 
     # --- TOOL 4: Get Active Canonical Rules (Context Retrieval) ---
     def get_active_rules(
         self,
         client_id: str,
-        process_name: Optional[str] = None,
-        principal: Optional[Union[Principal, str]] = None
-    ) -> List[CanonicalRule]:
+        process_name: str | None = None,
+        principal: Principal | str | None = None,
+    ) -> list[CanonicalRule]:
         """
         Retrieves approved active business rules for a given client/process.
         Guarantees that pending_review candidate rules are NEVER returned.
         """
         resolved = self._resolve_principal(client_id=client_id, principal=principal)
         return self.repo.get_active_rules(
-            client_id=resolved.client_id,
-            process_name=process_name
+            client_id=resolved.client_id, process_name=process_name
         )

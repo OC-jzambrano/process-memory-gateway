@@ -1,6 +1,8 @@
 import pytest
+
 from src.extractor.service import BedrockExtractorService
 from src.models.enums import RuleType
+
 
 @pytest.mark.ai
 def test_benchmark_f1_score():
@@ -10,7 +12,11 @@ def test_benchmark_f1_score():
         "BOMs must include version numbers. Do not create duplicate components if the SKU already exists."
     )
     result = svc.extract_from_text(dialogue, "bench_client")
-    expected = {RuleType.APPROVAL_POLICY, RuleType.NAMING_CONVENTION, RuleType.DATA_VALIDATION}
+    expected = {
+        RuleType.APPROVAL_POLICY,
+        RuleType.NAMING_CONVENTION,
+        RuleType.DATA_VALIDATION,
+    }
     extracted = {c.rule_type for c in result.candidates}
 
     tp = len(expected & extracted)

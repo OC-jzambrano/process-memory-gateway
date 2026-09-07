@@ -4,7 +4,8 @@ def test_demo_scenario_matches_run_demo(memory_tools):
     result = memory_tools.extract_memory_candidates(
         "In this company, Manufacturing is only installed with approval from the Operations Lead. "
         "BOMs must include version numbers. Do not create duplicate components if the SKU already exists.",
-        "test_client", "manufacturing_setup"
+        "test_client",
+        "manufacturing_setup",
     )
     assert len(result.candidates) >= 3
 

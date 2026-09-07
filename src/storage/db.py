@@ -1,7 +1,7 @@
 import sqlite3
-from pathlib import Path
-from typing import Union
 from contextlib import contextmanager
+from pathlib import Path
+
 from src.config import DEFAULT_DB_PATH, SQLITE_BUSY_TIMEOUT_MS
 
 SCHEMA_SQL = """
@@ -228,7 +228,8 @@ BEGIN
 END;
 """
 
-def get_connection(db_path: Union[str, Path] = DEFAULT_DB_PATH) -> sqlite3.Connection:
+
+def get_connection(db_path: str | Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
     """Returns a SQLite connection configured with row factory, foreign keys, WAL mode, and busy timeout."""
     conn = sqlite3.connect(str(db_path), timeout=float(SQLITE_BUSY_TIMEOUT_MS) / 1000.0)
     conn.row_factory = sqlite3.Row
@@ -237,8 +238,9 @@ def get_connection(db_path: Union[str, Path] = DEFAULT_DB_PATH) -> sqlite3.Conne
     conn.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS};")
     return conn
 
+
 @contextmanager
-def db_session(db_path: Union[str, Path] = DEFAULT_DB_PATH):
+def db_session(db_path: str | Path = DEFAULT_DB_PATH):
     """Context manager for SQLite connections with automatic commit/rollback and guaranteed closure."""
     conn = get_connection(db_path)
     try:
@@ -249,79 +251,119 @@ def db_session(db_path: Union[str, Path] = DEFAULT_DB_PATH):
     finally:
         conn.close()
 
+
 def _migrate_columns_if_needed(conn: sqlite3.Connection) -> None:
     """Safely adds newly introduced JSON columns if existing SQLite DB was created previously."""
     cursor = conn.cursor()
-    
+
     # Check memory_candidates columns
-    cand_cols = [r["name"] for r in cursor.execute("PRAGMA table_info(memory_candidates);").fetchall()]
+    cand_cols = [
+        r["name"]
+        for r in cursor.execute("PRAGMA table_info(memory_candidates);").fetchall()
+    ]
     if "structured_scope_json" not in cand_cols and len(cand_cols) > 0:
-        cursor.execute("ALTER TABLE memory_candidates ADD COLUMN structured_scope_json TEXT;")
+        cursor.execute(
+            "ALTER TABLE memory_candidates ADD COLUMN structured_scope_json TEXT;"
+        )
     if "structured_constraint_json" not in cand_cols and len(cand_cols) > 0:
-        cursor.execute("ALTER TABLE memory_candidates ADD COLUMN structured_constraint_json TEXT;")
+        cursor.execute(
+            "ALTER TABLE memory_candidates ADD COLUMN structured_constraint_json TEXT;"
+        )
 
     # Check canonical_rules columns
-    rule_cols = [r["name"] for r in cursor.execute("PRAGMA table_info(canonical_rules);").fetchall()]
+    rule_cols = [
+        r["name"]
+        for r in cursor.execute("PRAGMA table_info(canonical_rules);").fetchall()
+    ]
     if "structured_scope_json" not in rule_cols and len(rule_cols) > 0:
-        cursor.execute("ALTER TABLE canonical_rules ADD COLUMN structured_scope_json TEXT;")
+        cursor.execute(
+            "ALTER TABLE canonical_rules ADD COLUMN structured_scope_json TEXT;"
+        )
     if "structured_constraint_json" not in rule_cols and len(rule_cols) > 0:
-        cursor.execute("ALTER TABLE canonical_rules ADD COLUMN structured_constraint_json TEXT;")
+        cursor.execute(
+            "ALTER TABLE canonical_rules ADD COLUMN structured_constraint_json TEXT;"
+        )
 
     # Check review_events columns
-    evt_cols = [r["name"] for r in cursor.execute("PRAGMA table_info(review_events);").fetchall()]
+    evt_cols = [
+        r["name"]
+        for r in cursor.execute("PRAGMA table_info(review_events);").fetchall()
+    ]
     if "edited_scope_json" not in evt_cols and len(evt_cols) > 0:
         cursor.execute("ALTER TABLE review_events ADD COLUMN edited_scope_json TEXT;")
     if "edited_constraint_json" not in evt_cols and len(evt_cols) > 0:
-        cursor.execute("ALTER TABLE review_events ADD COLUMN edited_constraint_json TEXT;")
+        cursor.execute(
+            "ALTER TABLE review_events ADD COLUMN edited_constraint_json TEXT;"
+        )
 
     # Check odoo_connections columns
-    conn_cols = [r["name"] for r in cursor.execute("PRAGMA table_info(odoo_connections);").fetchall()]
+    conn_cols = [
+        r["name"]
+        for r in cursor.execute("PRAGMA table_info(odoo_connections);").fetchall()
+    ]
     if "status" not in conn_cols and len(conn_cols) > 0:
-        cursor.execute("ALTER TABLE odoo_connections ADD COLUMN status TEXT NOT NULL DEFAULT 'active';")
+        cursor.execute(
+            "ALTER TABLE odoo_connections ADD COLUMN status TEXT NOT NULL DEFAULT 'active';"
+        )
 
     # Check execution_runs columns
-    run_cols = [r["name"] for r in cursor.execute("PRAGMA table_info(execution_runs);").fetchall()]
+    run_cols = [
+        r["name"]
+        for r in cursor.execute("PRAGMA table_info(execution_runs);").fetchall()
+    ]
     if "connection_snapshot_json" not in run_cols and len(run_cols) > 0:
-        cursor.execute("ALTER TABLE execution_runs ADD COLUMN connection_snapshot_json TEXT;")
+        cursor.execute(
+            "ALTER TABLE execution_runs ADD COLUMN connection_snapshot_json TEXT;"
+        )
     if "execution_token" not in run_cols and len(run_cols) > 0:
         cursor.execute("ALTER TABLE execution_runs ADD COLUMN execution_token TEXT;")
     if "hash_algorithm_version" not in run_cols and len(run_cols) > 0:
-        cursor.execute("ALTER TABLE execution_runs ADD COLUMN hash_algorithm_version TEXT DEFAULT 'v2';")
+        cursor.execute(
+            "ALTER TABLE execution_runs ADD COLUMN hash_algorithm_version TEXT DEFAULT 'v2';"
+        )
     if "error_code" not in run_cols and len(run_cols) > 0:
         cursor.execute("ALTER TABLE execution_runs ADD COLUMN error_code TEXT;")
 
 
-def init_db(db_path: Union[str, Path] = DEFAULT_DB_PATH) -> None:
+def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
     """Initializes the database schema with constraints, indexes, and immutability triggers."""
-    with db_session(db_path) as conn:
-        with conn:
-            conn.executescript(SCHEMA_SQL)
-            _migrate_columns_if_needed(conn)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS schema_migrations (
-                    version     INTEGER PRIMARY KEY,
-                    name        TEXT NOT NULL,
-                    applied_at  TEXT NOT NULL DEFAULT (datetime('now'))
-                );
-            """)
-            applied = conn.execute("SELECT MAX(version) FROM schema_migrations;").fetchone()[0]
-            if applied is None or applied < 1:
-                conn.execute("INSERT OR IGNORE INTO schema_migrations (version, name) VALUES (1, 'initial_schema_and_json_columns');")
+    with db_session(db_path) as conn, conn:
+        conn.executescript(SCHEMA_SQL)
+        _migrate_columns_if_needed(conn)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version     INTEGER PRIMARY KEY,
+                name        TEXT NOT NULL,
+                applied_at  TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+        """)
+        applied = conn.execute(
+            "SELECT MAX(version) FROM schema_migrations;"
+        ).fetchone()[0]
+        if applied is None or applied < 1:
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version, name) VALUES (1, 'initial_schema_and_json_columns');"
+            )
 
-def run_migrations(db_path: Union[str, Path] = DEFAULT_DB_PATH) -> int:
+
+def run_migrations(db_path: str | Path = DEFAULT_DB_PATH) -> int:
     """Explicit migration runner called as a deployment step."""
     init_db(db_path)
-    with db_session(db_path) as conn:
-        with conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS schema_migrations (
-                    version     INTEGER PRIMARY KEY,
-                    name        TEXT NOT NULL,
-                    applied_at  TEXT NOT NULL DEFAULT (datetime('now'))
-                );
-            """)
-            applied = conn.execute("SELECT MAX(version) FROM schema_migrations;").fetchone()[0] or 0
-            if applied < 1:
-                conn.execute("INSERT INTO schema_migrations (version, name) VALUES (1, 'initial_schema_and_json_columns');")
-                return 1
-            return applied
+    with db_session(db_path) as conn, conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version     INTEGER PRIMARY KEY,
+                name        TEXT NOT NULL,
+                applied_at  TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+        """)
+        applied = (
+            conn.execute("SELECT MAX(version) FROM schema_migrations;").fetchone()[0]
+            or 0
+        )
+        if applied < 1:
+            conn.execute(
+                "INSERT INTO schema_migrations (version, name) VALUES (1, 'initial_schema_and_json_columns');"
+            )
+            return 1
+        return applied

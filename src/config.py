@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+
 from dotenv import load_dotenv
 
 # Base Paths
@@ -11,7 +12,10 @@ load_dotenv(dotenv_path=ENV_PATH)
 
 # Environment & Hosting Mode
 ENVIRONMENT = os.getenv("ENVIRONMENT", "development").lower()
-HOSTED_MODE = os.getenv("HOSTED_MODE", "false").lower() in ("true", "1", "yes") or ENVIRONMENT == "production"
+HOSTED_MODE = (
+    os.getenv("HOSTED_MODE", "false").lower() in ("true", "1", "yes")
+    or ENVIRONMENT == "production"
+)
 
 # Persistent Storage & Database Configuration
 DEFAULT_DATA_DIR = BASE_DIR / "data"
@@ -54,18 +58,17 @@ AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID", "")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "")
 
 BEDROCK_MODEL_ID = os.getenv(
-    "BEDROCK_MODEL_ID",
-    "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
+    "BEDROCK_MODEL_ID", "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
 )
-FALLBACK_MODEL_IDS = [
-    "global.anthropic.claude-haiku-4-5-20251001-v1:0"
-]
+FALLBACK_MODEL_IDS = ["global.anthropic.claude-haiku-4-5-20251001-v1:0"]
 
 # Amazon Cognito OAuth Settings
 COGNITO_USER_POOL_ID = os.getenv("COGNITO_USER_POOL_ID", "")
 COGNITO_REGION = os.getenv("COGNITO_REGION", AWS_REGION)
 COGNITO_APP_CLIENT_ID = os.getenv("COGNITO_APP_CLIENT_ID", "")
-COGNITO_RESOURCE_SERVER_IDENTIFIER = os.getenv("COGNITO_RESOURCE_SERVER_IDENTIFIER", "https://mcp.example.com")
+COGNITO_RESOURCE_SERVER_IDENTIFIER = os.getenv(
+    "COGNITO_RESOURCE_SERVER_IDENTIFIER", "https://mcp.example.com"
+)
 COGNITO_REQUIRED_SCOPE = os.getenv("COGNITO_REQUIRED_SCOPE", "mcp:tools")
 COGNITO_DOMAIN = os.getenv("COGNITO_DOMAIN", "")
 
@@ -85,4 +88,8 @@ ODOO_PASSWORD = os.getenv("ODOO_PASSWORD", "")
 ODOO_API_KEY = os.getenv("ODOO_API_KEY", "")
 ODOO_SECRET_ARN = os.getenv("ODOO_SECRET_ARN", "")
 ODOO_DEFAULT_PROJECT_ID = int(os.getenv("ODOO_DEFAULT_PROJECT_ID", "142"))
-ALLOW_LIVE_ODOO_WRITES = os.getenv("ALLOW_LIVE_ODOO_WRITES", "false").lower() in ("true", "1", "yes")
+ALLOW_LIVE_ODOO_WRITES = os.getenv("ALLOW_LIVE_ODOO_WRITES", "false").lower() in (
+    "true",
+    "1",
+    "yes",
+)

@@ -1,4 +1,3 @@
-
 SYSTEM_EXTRACTION_PROMPT = """You are an expert AI Operational Knowledge Extractor specializing in ERP (Odoo) and business process modeling.
 
 Your objective is to analyze conversational dialogue or text from users, consultants, or project managers, and identify tacit or explicit business rules, approval policies, naming conventions, data validation requirements, and operational constraints.
@@ -48,6 +47,7 @@ Respond ONLY with a valid JSON object matching this structure (no markdown fence
 }
 """
 
+
 def sanitize_input_text(text: str) -> str:
     """
     Sanitizes user input text to prevent XML boundary escape injection.
@@ -59,7 +59,10 @@ def sanitize_input_text(text: str) -> str:
     sanitized = sanitized.replace("<user_interaction>", "&lt;user_interaction&gt;")
     return sanitized
 
-def build_user_prompt(interaction_text: str, client_id: str, process_name: str = "general") -> str:
+
+def build_user_prompt(
+    interaction_text: str, client_id: str, process_name: str = "general"
+) -> str:
     safe_text = sanitize_input_text(interaction_text)
     return f"""Client Scope: {client_id}
 Process Context: {process_name}

@@ -1,10 +1,18 @@
 import pytest
-from src.storage.repository import MemoryRepository
-from src.integrations.mock_executor import MockTaskExecutor
-from src.api.service import HostedProcessMemoryService
+
 from src.api.auth_context import set_current_context
-from src.models.schemas import RequestContext, Company, User, Membership
-from src.models.enums import RoleType, RunStatus, ConstraintKind, CompanyStatus, MembershipStatus
+from src.api.service import HostedProcessMemoryService
+from src.integrations.mock_executor import MockTaskExecutor
+from src.models.enums import (
+    CompanyStatus,
+    ConstraintKind,
+    MembershipStatus,
+    RoleType,
+    RunStatus,
+)
+from src.models.schemas import Company, Membership, RequestContext, User
+from src.storage.repository import MemoryRepository
+
 
 @pytest.fixture
 def test_setup(tmp_path):
@@ -14,16 +22,61 @@ def test_setup(tmp_path):
     service = HostedProcessMemoryService(repo=repo, executor=mock_executor)
 
     # Provision Company 1: demo_company
-    repo.upsert_company(Company(company_id="demo_company", company_slug="demo_company", name="Demo Company", status=CompanyStatus.ACTIVE))
-    repo.upsert_user(User(user_id="demo_owner", email="owner@example.com", name="Demo Owner", status="active"))
-    repo.upsert_membership(Membership(membership_id="mem_1", company_id="demo_company", user_id="demo_owner", role=RoleType.OWNER, status=MembershipStatus.ACTIVE))
+    repo.upsert_company(
+        Company(
+            company_id="demo_company",
+            company_slug="demo_company",
+            name="Demo Company",
+            status=CompanyStatus.ACTIVE,
+        )
+    )
+    repo.upsert_user(
+        User(
+            user_id="demo_owner",
+            email="owner@example.com",
+            name="Demo Owner",
+            status="active",
+        )
+    )
+    repo.upsert_membership(
+        Membership(
+            membership_id="mem_1",
+            company_id="demo_company",
+            user_id="demo_owner",
+            role=RoleType.OWNER,
+            status=MembershipStatus.ACTIVE,
+        )
+    )
 
     # Provision Company 2: other_company
-    repo.upsert_company(Company(company_id="other_company", company_slug="other_company", name="Other Company Inc", status=CompanyStatus.ACTIVE))
-    repo.upsert_user(User(user_id="other_user", email="user@other.com", name="Other User", status="active"))
-    repo.upsert_membership(Membership(membership_id="mem_2", company_id="other_company", user_id="other_user", role=RoleType.OWNER, status=MembershipStatus.ACTIVE))
+    repo.upsert_company(
+        Company(
+            company_id="other_company",
+            company_slug="other_company",
+            name="Other Company Inc",
+            status=CompanyStatus.ACTIVE,
+        )
+    )
+    repo.upsert_user(
+        User(
+            user_id="other_user",
+            email="user@other.com",
+            name="Other User",
+            status="active",
+        )
+    )
+    repo.upsert_membership(
+        Membership(
+            membership_id="mem_2",
+            company_id="other_company",
+            user_id="other_user",
+            role=RoleType.OWNER,
+            status=MembershipStatus.ACTIVE,
+        )
+    )
 
     return service, repo, mock_executor
+
 
 def test_full_pilot_demonstration_lifecycle(test_setup):
     service, repo, mock_executor = test_setup
@@ -31,14 +84,21 @@ def test_full_pilot_demonstration_lifecycle(test_setup):
     # =========================================================================
     # STEP 1: Empty company starts with zero rules
     # =========================================================================
-    set_current_context(RequestContext(
-        company_id="demo_company",
-        company_slug="demo_company",
-        user_id="demo_owner",
-        email="owner@example.com",
-        role=RoleType.OWNER
-    ))
-    context_pack = service.get_company_context(system="odoo", application="project", resource="project.task", operation="create")
+    set_current_context(
+        RequestContext(
+            company_id="demo_company",
+            company_slug="demo_company",
+            user_id="demo_owner",
+            email="owner@example.com",
+            role=RoleType.OWNER,
+        )
+    )
+    context_pack = service.get_company_context(
+        system="odoo",
+        application="project",
+        resource="project.task",
+        operation="create",
+    )
     assert len(context_pack.rules) == 0, "Company must start with zero rules"
 
     # =========================================================================
@@ -48,7 +108,7 @@ def test_full_pilot_demonstration_lifecycle(test_setup):
         title="[PM-PILOT] Baseline without rule",
         description="Confirm that a company with no approved rule can create a normal task.",
         definition_of_done=None,
-        correlation_id="corr_baseline_01"
+        correlation_id="corr_baseline_01",
     )
     assert baseline_res.status == RunStatus.CREATED
     assert baseline_res.odoo_task_id is not None
@@ -75,8 +135,7 @@ def test_full_pilot_demonstration_lifecycle(test_setup):
     # STEP 5: Approve candidate through chat
     # =========================================================================
     review_res = service.review_memory_candidate(
-        candidate_id=candidate_id,
-        decision="approve"
+        candidate_id=candidate_id, decision="approve"
     )
     assert review_res.status == "approved"
     assert review_res.rule_id is not None
@@ -85,7 +144,10 @@ def test_full_pilot_demonstration_lifecycle(test_setup):
     # Verify rule is now in canonical active memory
     active_rules = repo.get_active_rules("demo_company")
     assert len(active_rules) == 1
-    assert active_rules[0].structured_constraint.kind == ConstraintKind.REQUIRED_NONEMPTY_LIST
+    assert (
+        active_rules[0].structured_constraint.kind
+        == ConstraintKind.REQUIRED_NONEMPTY_LIST
+    )
 
     # =========================================================================
     # STEP 6: Fresh Chat / Attempt task creation without DoD -> BLOCKED
@@ -95,12 +157,14 @@ def test_full_pilot_demonstration_lifecycle(test_setup):
         title="[PM-PILOT] Memory across sessions",
         description="Verify that approved company memory survives a new agent session.",
         definition_of_done=None,
-        correlation_id="corr_pilot_session_01"
+        correlation_id="corr_pilot_session_01",
     )
     assert blocked_res.status == RunStatus.NEEDS_CLARIFICATION
     assert "definition_of_done" in blocked_res.missing_information
     assert len(blocked_res.applied_rule_ids) >= 1
-    assert len(mock_executor.tasks) == task_count_before, "Zero Odoo calls must occur when blocked!"
+    assert len(mock_executor.tasks) == task_count_before, (
+        "Zero Odoo calls must occur when blocked!"
+    )
 
     # =========================================================================
     # STEP 7: Correct and create the task with DoD
@@ -111,9 +175,9 @@ def test_full_pilot_demonstration_lifecycle(test_setup):
         definition_of_done=[
             "The task is visible in Odoo project 142.",
             "The task description contains this Definition of Done.",
-            "Process Memory returns the created Odoo task ID."
+            "Process Memory returns the created Odoo task ID.",
         ],
-        correlation_id="corr_pilot_session_01"
+        correlation_id="corr_pilot_session_01",
     )
     assert success_res.status == RunStatus.CREATED
     assert success_res.odoo_task_id is not None
@@ -133,32 +197,43 @@ def test_full_pilot_demonstration_lifecycle(test_setup):
         definition_of_done=[
             "The task is visible in Odoo project 142.",
             "The task description contains this Definition of Done.",
-            "Process Memory returns the created Odoo task ID."
+            "Process Memory returns the created Odoo task ID.",
         ],
-        correlation_id="corr_pilot_session_01"  # Same correlation ID
+        correlation_id="corr_pilot_session_01",  # Same correlation ID
     )
     assert retry_res.status == RunStatus.CREATED
     assert retry_res.odoo_task_id == created_task_id
-    assert len(mock_executor.tasks) == task_count_after, "Reusing correlation ID must not create duplicate Odoo tasks!"
+    assert len(mock_executor.tasks) == task_count_after, (
+        "Reusing correlation ID must not create duplicate Odoo tasks!"
+    )
 
     # =========================================================================
     # STEP 9: Multi-Tenant Isolation (Second Company is Unaffected)
     # =========================================================================
-    set_current_context(RequestContext(
-        company_id="other_company",
-        company_slug="other_company",
-        user_id="other_user",
-        email="user@other.com",
-        role=RoleType.OWNER
-    ))
-    other_pack = service.get_company_context(system="odoo", application="project", resource="project.task", operation="create")
-    assert len(other_pack.rules) == 0, "Second company must NOT receive Company 1's rules"
+    set_current_context(
+        RequestContext(
+            company_id="other_company",
+            company_slug="other_company",
+            user_id="other_user",
+            email="user@other.com",
+            role=RoleType.OWNER,
+        )
+    )
+    other_pack = service.get_company_context(
+        system="odoo",
+        application="project",
+        resource="project.task",
+        operation="create",
+    )
+    assert len(other_pack.rules) == 0, (
+        "Second company must NOT receive Company 1's rules"
+    )
 
     other_task_res = service.create_project_task(
         title="[PM-PILOT] Company 2 Task without DoD",
         description="Company 2 has no DoD rule so task should succeed.",
         definition_of_done=None,
-        correlation_id="corr_co2_01"
+        correlation_id="corr_co2_01",
     )
     assert other_task_res.status == RunStatus.CREATED
     assert other_task_res.odoo_task_id is not None

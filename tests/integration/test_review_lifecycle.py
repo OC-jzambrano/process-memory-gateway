@@ -1,10 +1,11 @@
-from src.models.enums import RuleStatus, RuleType, DecisionType
+from src.models.enums import DecisionType, RuleStatus, RuleType
+
 
 def test_approve_candidate_lifecycle(repo, make_candidate):
     make_candidate(
         candidate_id="cand_app_01",
         rule_text="BOM names must include version string.",
-        rule_type=RuleType.NAMING_CONVENTION
+        rule_type=RuleType.NAMING_CONVENTION,
     )
 
     # 1. Before approval: active rules are empty
@@ -15,7 +16,7 @@ def test_approve_candidate_lifecycle(repo, make_candidate):
         candidate_id="cand_app_01",
         decision=DecisionType.APPROVE,
         reviewer="juan_zambrano",
-        notes="Approved for standard BOM naming policy."
+        notes="Approved for standard BOM naming policy.",
     )
     assert canonical is not None
     assert canonical.version == 1
@@ -32,11 +33,12 @@ def test_approve_candidate_lifecycle(repo, make_candidate):
     assert events[0].decision == DecisionType.APPROVE
     assert events[0].reviewer == "juan_zambrano"
 
+
 def test_reject_candidate_lifecycle(repo, make_candidate):
     make_candidate(
         candidate_id="cand_rej_01",
         rule_text="Temporary rule that should be rejected.",
-        rule_type=RuleType.BUSINESS_PREFERENCE
+        rule_type=RuleType.BUSINESS_PREFERENCE,
     )
 
     # Reject candidate
@@ -44,7 +46,7 @@ def test_reject_candidate_lifecycle(repo, make_candidate):
         candidate_id="cand_rej_01",
         decision=DecisionType.REJECT,
         reviewer="juan_zambrano",
-        notes="Not a permanent company policy."
+        notes="Not a permanent company policy.",
     )
     assert canonical is None
 
@@ -55,23 +57,30 @@ def test_reject_candidate_lifecycle(repo, make_candidate):
     # Active rules remain empty
     assert len(repo.get_active_rules("test_client", "general")) == 0
 
+
 def test_edit_and_approve_lifecycle(repo, make_candidate):
     make_candidate(
         candidate_id="cand_edit_01",
         rule_text="Initial unrefined text.",
-        rule_type=RuleType.DATA_VALIDATION
+        rule_type=RuleType.DATA_VALIDATION,
     )
 
     canonical = repo.review_candidate(
         candidate_id="cand_edit_01",
         decision=DecisionType.EDIT,
         reviewer="lead_architect",
-        edited_rule_text="Refined rule text: SKU duplicate check is mandatory before component creation."
+        edited_rule_text="Refined rule text: SKU duplicate check is mandatory before component creation.",
     )
     assert canonical is not None
-    assert canonical.rule_text == "Refined rule text: SKU duplicate check is mandatory before component creation."
+    assert (
+        canonical.rule_text
+        == "Refined rule text: SKU duplicate check is mandatory before component creation."
+    )
     assert canonical.version == 1
 
     active = repo.get_active_rules("test_client", "general")
     assert len(active) == 1
-    assert active[0].rule_text == "Refined rule text: SKU duplicate check is mandatory before component creation."
+    assert (
+        active[0].rule_text
+        == "Refined rule text: SKU duplicate check is mandatory before component creation."
+    )

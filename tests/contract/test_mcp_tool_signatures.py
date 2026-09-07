@@ -1,7 +1,9 @@
 """Compatibility checks for internal Python APIs, not the public MCP registry."""
 
 import inspect
+
 from src.api.memory_tools import ProcessMemoryTools
+
 
 def test_extract_tool_signature():
     """Internal extraction API parameter names."""
@@ -13,6 +15,7 @@ def test_extract_tool_signature():
     assert "source_type" in params
     assert "principal" in params
 
+
 def test_get_candidates_tool_signature():
     """Internal candidate-list API signature."""
     sig = inspect.signature(ProcessMemoryTools.get_candidate_rules)
@@ -21,6 +24,7 @@ def test_get_candidates_tool_signature():
     assert "status" in params
     assert "process_name" in params
     assert "principal" in params
+
 
 def test_review_tool_signature():
     """Internal review API signature."""
@@ -34,6 +38,7 @@ def test_review_tool_signature():
     assert "notes" in params
     assert "principal" in params
 
+
 def test_get_active_rules_tool_signature():
     """Internal active-rule retrieval API signature."""
     sig = inspect.signature(ProcessMemoryTools.get_active_rules)
@@ -41,6 +46,7 @@ def test_get_active_rules_tool_signature():
     assert "client_id" in params
     assert "process_name" in params
     assert "principal" in params
+
 
 def test_internal_compatibility_methods_exist():
     """Preserved Python consumers can still call the four internal methods."""
@@ -50,10 +56,16 @@ def test_internal_compatibility_methods_exist():
     assert callable(getattr(tools, "review_candidate_rule", None))
     assert callable(getattr(tools, "get_active_rules", None))
 
+
 def test_all_tools_have_docstrings():
     """Internal API methods retain documentation for Python consumers."""
     tools = ProcessMemoryTools
-    for name in ["extract_memory_candidates", "get_candidate_rules", "review_candidate_rule", "get_active_rules"]:
+    for name in [
+        "extract_memory_candidates",
+        "get_candidate_rules",
+        "review_candidate_rule",
+        "get_active_rules",
+    ]:
         method = getattr(tools, name)
         assert method.__doc__ is not None, f"Tool {name} is missing its docstring"
         assert len(method.__doc__.strip()) > 20, f"Tool {name} docstring is too short"

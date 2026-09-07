@@ -5,8 +5,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from src.api.memory_tools import ProcessMemoryTools
-from src.models.schemas import Client, BusinessProcess, Principal
 from src.models.enums import DecisionType
+from src.models.schemas import BusinessProcess, Client, Principal
+
 
 def main():
     print("=" * 70)
@@ -16,22 +17,28 @@ def main():
     tools = ProcessMemoryTools()
     client_id = "odooconcept_demo"
     process_name = "manufacturing_setup"
-    principal = Principal(client_id=client_id, user_id="juan_zambrano", role="lead_consultant")
+    principal = Principal(
+        client_id=client_id, user_id="juan_zambrano", role="lead_consultant"
+    )
 
     # 1. Seed Client & Process
     print("\n[Step 1] Registering Client & Process Context...")
-    tools.repo.upsert_client(Client(
-        client_id=client_id,
-        client_name="Odoo Concept Demo Client",
-        industry="Manufacturing & Distribution",
-        odoo_url="https://community.odooconcept.com"
-    ))
-    tools.repo.add_process(BusinessProcess(
-        process_id="proc_mrp_001",
-        client_id=client_id,
-        process_name=process_name,
-        description="Manufacturing module installation and BOM creation workflow"
-    ))
+    tools.repo.upsert_client(
+        Client(
+            client_id=client_id,
+            client_name="Odoo Concept Demo Client",
+            industry="Manufacturing & Distribution",
+            odoo_url="https://community.odooconcept.com",
+        )
+    )
+    tools.repo.add_process(
+        BusinessProcess(
+            process_id="proc_mrp_001",
+            client_id=client_id,
+            process_name=process_name,
+            description="Manufacturing module installation and BOM creation workflow",
+        )
+    )
     print(f"Registered Client: '{client_id}', Process: '{process_name}'")
 
     # 2. Raw User Dialogue Input
@@ -46,7 +53,7 @@ def main():
         interaction_text=sample_dialogue,
         client_id=client_id,
         process_name=process_name,
-        principal=principal
+        principal=principal,
     )
 
     print(f"Extraction Session Created: {extraction_result.session_id}")
@@ -60,8 +67,10 @@ def main():
         print(f"Candidate #{idx} [ID: {c.candidate_id}]:")
         print(f"  • Rule Statement:    {c.rule_text}")
         print(f"  • Type:              {c.rule_type.value}")
-        print(f"  • Severity:          {c.severity.value} (Mode: {c.enforcement_mode.value})")
-        print(f"  • Source Quote:      \"{c.source_quote}\"")
+        print(
+            f"  • Severity:          {c.severity.value} (Mode: {c.enforcement_mode.value})"
+        )
+        print(f'  • Source Quote:      "{c.source_quote}"')
         print(f"  • Confidence:        {c.confidence * 100:.1f}%")
         print(f"  • Status:            {c.status.value}")
         print("-" * 70)
@@ -69,7 +78,9 @@ def main():
     # 4. Verify Active Rules Isolation
     print("\n[Step 4] Checking Active Canonical Rules BEFORE Human Review...")
     active_before = tools.get_active_rules(client_id, process_name, principal=principal)
-    print(f"Active Rules count: {len(active_before)} (Guaranteed 0 - pending rules cannot enforce!)")
+    print(
+        f"Active Rules count: {len(active_before)} (Guaranteed 0 - pending rules cannot enforce!)"
+    )
 
     # 5. Human Review Workflow
     print("\n[Step 5] Performing Human Review (Approve Candidate #1 & #2)...")
@@ -81,9 +92,11 @@ def main():
             reviewer=principal.user_id,
             client_id=client_id,
             notes="Standard company operations policy.",
-            principal=principal
+            principal=principal,
         )
-        print(f"  -> Approved '{c1.candidate_id}': Created Canonical Rule '{promoted_1.rule_id}' (v{promoted_1.version})")
+        print(
+            f"  -> Approved '{c1.candidate_id}': Created Canonical Rule '{promoted_1.rule_id}' (v{promoted_1.version})"
+        )
 
     if len(extraction_result.candidates) > 1:
         c2 = extraction_result.candidates[1]
@@ -93,20 +106,25 @@ def main():
             reviewer=principal.user_id,
             client_id=client_id,
             notes="Required naming standard.",
-            principal=principal
+            principal=principal,
         )
-        print(f"  -> Approved '{c2.candidate_id}': Created Canonical Rule '{promoted_2.rule_id}' (v{promoted_2.version})")
+        print(
+            f"  -> Approved '{c2.candidate_id}': Created Canonical Rule '{promoted_2.rule_id}' (v{promoted_2.version})"
+        )
 
     # 6. Verify Active Canonical Rules
     print("\n[Step 6] Checking Active Canonical Rules AFTER Human Review...")
     active_after = tools.get_active_rules(client_id, process_name, principal=principal)
     print(f"Active Rules count: {len(active_after)}")
     for r in active_after:
-        print(f"  * [v{r.version}] [{r.rule_type.value.upper()}] ({r.severity.value}): {r.rule_text}")
+        print(
+            f"  * [v{r.version}] [{r.rule_type.value.upper()}] ({r.severity.value}): {r.rule_text}"
+        )
 
     print("\n" + "=" * 70)
     print("DEMO COMPLETED SUCCESSFULLY")
     print("=" * 70)
+
 
 if __name__ == "__main__":
     main()

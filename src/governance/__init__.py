@@ -1,4 +1,4 @@
 from src.governance.memory_retriever import MemoryRetriever
-from src.governance.task_validator import TaskValidator, TaskValidationResult
+from src.governance.task_validator import TaskValidationResult, TaskValidator
 
-__all__ = ["MemoryRetriever", "TaskValidator", "TaskValidationResult"]
+__all__ = ["MemoryRetriever", "TaskValidationResult", "TaskValidator"]

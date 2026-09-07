@@ -1,25 +1,28 @@
 import sys
-import pytest
 import tempfile
 import uuid
 from pathlib import Path
 
+import pytest
+
 # Ensure project root is on sys.path for absolute imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.storage.repository import MemoryRepository
-from src.storage.db import init_db
-from src.extractor.service import BedrockExtractorService
 from src.api.memory_tools import ProcessMemoryTools
-from src.models.schemas import Client, ExtractionSession, CandidateRule
-from src.models.enums import (
-    RuleStatus, RuleType, Severity, EnforcementMode
-)
+from src.extractor.service import BedrockExtractorService
+from src.models.enums import EnforcementMode, RuleStatus, RuleType, Severity
+from src.models.schemas import CandidateRule, Client, ExtractionSession
+from src.storage.db import init_db
+from src.storage.repository import MemoryRepository
+
 
 # --- PYTEST MARKERS ---
 def pytest_configure(config):
-    config.addinivalue_line("markers", "ai: Tests requiring live AWS Bedrock (deselect with -m 'not ai')")
+    config.addinivalue_line(
+        "markers", "ai: Tests requiring live AWS Bedrock (deselect with -m 'not ai')"
+    )
     config.addinivalue_line("markers", "slow: Tests taking > 10 seconds")
+
 
 # --- FIXTURE: Temporary Database ---
 @pytest.fixture
@@ -32,8 +35,9 @@ def temp_db():
     if db_path.exists():
         try:
             db_path.unlink()
-        except Exception:
-            pass
+        except OSError as exc:
+            pytest.fail(f"Temporary database cleanup failed: {exc}")
+
 
 # --- FIXTURE: Repository with seeded client ---
 @pytest.fixture
@@ -42,6 +46,7 @@ def repo(temp_db):
     r = MemoryRepository(db_path=temp_db)
     r.upsert_client(Client(client_id="test_client", client_name="Test Corp"))
     return r
+
 
 # --- FIXTURE: Repository with two clients (multi-tenant tests) ---
 @pytest.fixture
@@ -52,6 +57,7 @@ def repo_two_clients(temp_db):
     r.upsert_client(Client(client_id="client_b", client_name="Company B"))
     return r
 
+
 # --- FIXTURE: ProcessMemoryTools with deterministic offline extractor ---
 @pytest.fixture
 def memory_tools(temp_db):
@@ -61,17 +67,19 @@ def memory_tools(temp_db):
     extractor = BedrockExtractorService(offline_mode=True)
     return ProcessMemoryTools(repo=r, extractor=extractor)
 
+
 # --- FIXTURE: Helper to create and save a candidate ---
 @pytest.fixture
 def make_candidate(repo):
     """Factory fixture that creates and saves a candidate rule with valid session provenance."""
+
     def _make(
         candidate_id=None,
         client_id="test_client",
         process_name="general",
         rule_text="Test rule statement.",
         rule_type=RuleType.OPERATIONAL_CONSTRAINT,
-        session_id=None
+        session_id=None,
     ):
         cid = candidate_id or f"cand_{uuid.uuid4().hex}"
         sid = session_id or f"sess_{uuid.uuid4().hex}"
@@ -82,7 +90,7 @@ def make_candidate(repo):
             process_name=process_name,
             interaction_text="Test interaction text.",
             model_id="test-model",
-            candidates_extracted=1
+            candidates_extracted=1,
         )
         repo.create_session(session)
 
@@ -97,11 +105,13 @@ def make_candidate(repo):
             enforcement_mode=EnforcementMode.ADVISORY,
             source_quote="Test interaction text",
             confidence=0.90,
-            status=RuleStatus.PENDING_REVIEW
+            status=RuleStatus.PENDING_REVIEW,
         )
         repo.save_candidates([cand])
         return cand
+
     return _make
+
 
 # --- BENCHMARK DIALOGUE (reused across layers) ---
 BENCHMARK_DIALOGUE = (

@@ -1,8 +1,12 @@
 def test_cumulative_extraction_across_turns(memory_tools):
     """Multiple conversation turns build cumulative candidate rules."""
-    r1 = memory_tools.extract_memory_candidates("BOMs must include version numbers in name.", "test_client", "mrp")
+    r1 = memory_tools.extract_memory_candidates(
+        "BOMs must include version numbers in name.", "test_client", "mrp"
+    )
     r2 = memory_tools.extract_memory_candidates(
-        "Manufacturing requires approval from the team leader.", "test_client", "purchasing"
+        "Manufacturing requires approval from the team leader.",
+        "test_client",
+        "purchasing",
     )
 
     all_pending = memory_tools.get_candidate_rules("test_client")

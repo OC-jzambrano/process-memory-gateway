@@ -1,80 +1,80 @@
 import json
 import uuid
-from typing import Optional, List, Dict, Any
-import pytest
+from typing import Any
 
+import pytest
 from mcp.shared.memory import create_connected_server_and_client_session
-from src.api.memory_tools import ProcessMemoryTools
-from src.storage.repository import MemoryRepository
-from src.extractor.service import ProcessMemoryExtractorService
+
 from server import (
     create_mcp_server,
-    remember_company_instruction,
-    list_memory_candidates,
-    review_memory_candidate,
+    create_project_task,
     get_company_context,
-    create_project_task
+    list_memory_candidates,
+    remember_company_instruction,
+    review_memory_candidate,
 )
-from src.api.auth_context import set_current_context, RequestContext
-from src.models.schemas import (
-    Company,
-    User,
-    Membership,
-    ActionContext,
-    DeterministicConstraint,
-    CandidateResult,
-    CandidateRule,
-    ReviewResult,
-    MemoryPack,
-    MemoryPackRuleItem,
-    TaskCreationResult
-)
+from src.api.auth_context import RequestContext, set_current_context
+from src.api.memory_tools import ProcessMemoryTools
+from src.extractor.service import ProcessMemoryExtractorService
 from src.models.enums import (
+    CompanyStatus,
+    ConstraintKind,
     DecisionType,
     EnforcementMode,
-    RoleType,
-    CompanyStatus,
     MembershipStatus,
-    RuleType,
+    RoleType,
     RuleStatus,
-    ConstraintKind,
-    RunStatus
+    RuleType,
+    RunStatus,
 )
+from src.models.schemas import (
+    ActionContext,
+    CandidateResult,
+    CandidateRule,
+    Company,
+    DeterministicConstraint,
+    Membership,
+    MemoryPack,
+    MemoryPackRuleItem,
+    ReviewResult,
+    TaskCreationResult,
+    User,
+)
+from src.storage.repository import MemoryRepository
+
 
 class FakeProcessMemoryService:
     """Deterministic fake service implementing all 5 operations with zero database or Odoo connections."""
 
     def __init__(self):
-        self.invocations: List[Dict[str, Any]] = []
+        self.invocations: list[dict[str, Any]] = []
 
     def remember_company_instruction(
-        self,
-        instruction_text: str,
-        context_hint: Optional[ActionContext] = None
+        self, instruction_text: str, context_hint: ActionContext | None = None
     ) -> CandidateResult:
-        self.invocations.append({
-            "method": "remember_company_instruction",
-            "instruction_text": instruction_text,
-            "context_hint": context_hint
-        })
+        self.invocations.append(
+            {
+                "method": "remember_company_instruction",
+                "instruction_text": instruction_text,
+                "context_hint": context_hint,
+            }
+        )
         return CandidateResult(
             status="staged",
             candidate_id="cand_fake_123",
             rule_text=instruction_text,
             scope=context_hint or ActionContext(),
             constraint=DeterministicConstraint(
-                kind=ConstraintKind.REQUIRED_NONEMPTY_LIST,
-                field="definition_of_done"
+                kind=ConstraintKind.REQUIRED_NONEMPTY_LIST, field="definition_of_done"
             ),
             confidence=0.95,
-            message="Instruction staged successfully."
+            message="Instruction staged successfully.",
         )
 
-    def list_memory_candidates(self, status: str = "pending_review") -> List[CandidateRule]:
-        self.invocations.append({
-            "method": "list_memory_candidates",
-            "status": status
-        })
+    def list_memory_candidates(
+        self, status: str = "pending_review"
+    ) -> list[CandidateRule]:
+        self.invocations.append({"method": "list_memory_candidates", "status": status})
         return [
             CandidateRule(
                 candidate_id="cand_fake_123",
@@ -84,7 +84,7 @@ class FakeProcessMemoryService:
                 rule_type=RuleType.OPERATIONAL_CONSTRAINT,
                 source_quote="Every task must have acceptance criteria.",
                 confidence=0.95,
-                status=RuleStatus.PENDING_REVIEW
+                status=RuleStatus.PENDING_REVIEW,
             )
         ]
 
@@ -92,46 +92,54 @@ class FakeProcessMemoryService:
         self,
         candidate_id: str,
         decision: str,
-        edited_rule_text: Optional[str] = None,
-        edited_scope: Optional[ActionContext] = None,
-        edited_constraint: Optional[Dict[str, Any]] = None,
-        notes: Optional[str] = None
+        edited_rule_text: str | None = None,
+        edited_scope: ActionContext | None = None,
+        edited_constraint: dict[str, Any] | None = None,
+        notes: str | None = None,
     ) -> ReviewResult:
-        self.invocations.append({
-            "method": "review_memory_candidate",
-            "candidate_id": candidate_id,
-            "decision": decision,
-            "edited_rule_text": edited_rule_text,
-            "edited_scope": edited_scope,
-            "edited_constraint": edited_constraint,
-            "notes": notes
-        })
-        d_enum = DecisionType(decision) if decision in [d.value for d in DecisionType] else DecisionType.APPROVE
+        self.invocations.append(
+            {
+                "method": "review_memory_candidate",
+                "candidate_id": candidate_id,
+                "decision": decision,
+                "edited_rule_text": edited_rule_text,
+                "edited_scope": edited_scope,
+                "edited_constraint": edited_constraint,
+                "notes": notes,
+            }
+        )
+        d_enum = (
+            DecisionType(decision)
+            if decision in [d.value for d in DecisionType]
+            else DecisionType.APPROVE
+        )
         return ReviewResult(
             status="approved" if decision == "approve" else decision,
             candidate_id=candidate_id,
             decision=d_enum,
             rule_id="rule_fake_999",
             version=1,
-            message="Candidate approved into active canonical memory."
+            message="Candidate approved into active canonical memory.",
         )
 
     def get_company_context(
         self,
         system: str = "odoo",
-        application: Optional[str] = None,
-        resource: Optional[str] = None,
-        operation: Optional[str] = None,
-        fields: Optional[List[str]] = None
+        application: str | None = None,
+        resource: str | None = None,
+        operation: str | None = None,
+        fields: list[str] | None = None,
     ) -> MemoryPack:
-        self.invocations.append({
-            "method": "get_company_context",
-            "system": system,
-            "application": application,
-            "resource": resource,
-            "operation": operation,
-            "fields": fields
-        })
+        self.invocations.append(
+            {
+                "method": "get_company_context",
+                "system": system,
+                "application": application,
+                "resource": resource,
+                "operation": operation,
+                "fields": fields,
+            }
+        )
         return MemoryPack(
             company_slug="co_fake",
             system=system,
@@ -145,31 +153,38 @@ class FakeProcessMemoryService:
                     rule_text="Every task must have acceptance criteria.",
                     rule_type=RuleType.OPERATIONAL_CONSTRAINT,
                     enforcement_mode=EnforcementMode.BLOCKING,
-                    scope=ActionContext(system=system, application=application, resource=resource, operation=operation),
+                    scope=ActionContext(
+                        system=system,
+                        application=application,
+                        resource=resource,
+                        operation=operation,
+                    ),
                     constraint=DeterministicConstraint(
                         kind=ConstraintKind.REQUIRED_NONEMPTY_LIST,
-                        field="definition_of_done"
-                    )
+                        field="definition_of_done",
+                    ),
                 )
-            ]
+            ],
         )
 
     def create_project_task(
         self,
         title: str,
         description: str,
-        definition_of_done: Optional[List[str]] = None,
-        project_id: Optional[int] = None,
-        correlation_id: Optional[str] = None
+        definition_of_done: list[str] | None = None,
+        project_id: int | None = None,
+        correlation_id: str | None = None,
     ) -> TaskCreationResult:
-        self.invocations.append({
-            "method": "create_project_task",
-            "title": title,
-            "description": description,
-            "definition_of_done": definition_of_done,
-            "project_id": project_id,
-            "correlation_id": correlation_id
-        })
+        self.invocations.append(
+            {
+                "method": "create_project_task",
+                "title": title,
+                "description": description,
+                "definition_of_done": definition_of_done,
+                "project_id": project_id,
+                "correlation_id": correlation_id,
+            }
+        )
         return TaskCreationResult(
             status=RunStatus.CREATED,
             run_id="run_fake_123",
@@ -179,8 +194,9 @@ class FakeProcessMemoryService:
             odoo_task_id=9876,
             odoo_task_url="https://community.odooconcept.com/web#id=9876",
             task_name=title,
-            message=f"Task #9876 successfully created and verified in Odoo Project {project_id or 142}."
+            message=f"Task #9876 successfully created and verified in Odoo Project {project_id or 142}.",
         )
+
 
 # =========================================================================
 # 1. Server Module Import Isolation
@@ -188,8 +204,10 @@ class FakeProcessMemoryService:
 def test_no_runtime_db_or_odoo_on_server_module_import():
     """Verify importing server module does not eagerly initialize database or Odoo."""
     import server
+
     assert hasattr(server, "create_mcp_server")
     assert hasattr(server, "register_tools")
+
 
 # =========================================================================
 # 2. Public Protocol Discovery: Exact 5 Tools
@@ -208,11 +226,12 @@ async def test_protocol_tools_list_exact_five_allowlist():
             "list_memory_candidates",
             "review_memory_candidate",
             "get_company_context",
-            "create_project_task"
+            "create_project_task",
         }
         assert advertised_names == expected_names, (
             f"MCP protocol discovery mismatch! Expected {expected_names}, got {advertised_names}"
         )
+
 
 # =========================================================================
 # 3. Protocol Schema Security: Zero Caller-Controlled Identity
@@ -231,7 +250,7 @@ async def test_protocol_advertised_schemas_have_no_caller_controlled_identity():
         "user_id",
         "role",
         "principal",
-        "actor"
+        "actor",
     }
 
     async with create_connected_server_and_client_session(server) as session:
@@ -244,6 +263,7 @@ async def test_protocol_advertised_schemas_have_no_caller_controlled_identity():
                 f"Tool '{tool.name}' advertises forbidden caller-controlled identity parameters: {overlap}"
             )
 
+
 # =========================================================================
 # 4. Protocol Tool Invocation: Removed Legacy Tools Must Fail Closed
 # =========================================================================
@@ -254,23 +274,57 @@ async def test_protocol_calling_removed_legacy_tools_returns_unknown_tool_and_ze
     server = create_mcp_server(service=fake_svc)
 
     removed_tools = [
-        ("extract_memory_candidates", {"interaction_text": "dialogue", "client_id": "c1", "principal": {"user_id": "u1"}}),
-        ("get_candidate_rules", {"client_id": "c1", "status": "pending_review", "principal": {"user_id": "u1"}}),
-        ("review_candidate_rule", {"candidate_id": "cand_1", "decision": "approve", "reviewer": "user1", "client_id": "c1"}),
-        ("get_active_rules", {"client_id": "c1", "process_name": "project", "principal": {"user_id": "u1"}})
+        (
+            "extract_memory_candidates",
+            {
+                "interaction_text": "dialogue",
+                "client_id": "c1",
+                "principal": {"user_id": "u1"},
+            },
+        ),
+        (
+            "get_candidate_rules",
+            {
+                "client_id": "c1",
+                "status": "pending_review",
+                "principal": {"user_id": "u1"},
+            },
+        ),
+        (
+            "review_candidate_rule",
+            {
+                "candidate_id": "cand_1",
+                "decision": "approve",
+                "reviewer": "user1",
+                "client_id": "c1",
+            },
+        ),
+        (
+            "get_active_rules",
+            {
+                "client_id": "c1",
+                "process_name": "project",
+                "principal": {"user_id": "u1"},
+            },
+        ),
     ]
 
     async with create_connected_server_and_client_session(server) as session:
         for tool_name, args in removed_tools:
             res = await session.call_tool(tool_name, arguments=args)
-            assert res.isError is True, f"Calling removed tool '{tool_name}' did not return isError=True"
+            assert res.isError is True, (
+                f"Calling removed tool '{tool_name}' did not return isError=True"
+            )
             content_text = "".join(c.text for c in res.content if hasattr(c, "text"))
             assert "unknown tool" in content_text.lower(), (
                 f"Expected 'Unknown tool' error for '{tool_name}', got: {content_text}"
             )
 
     # Assert zero service invocations occurred
-    assert len(fake_svc.invocations) == 0, f"Expected 0 service invocations, got {len(fake_svc.invocations)}"
+    assert len(fake_svc.invocations) == 0, (
+        f"Expected 0 service invocations, got {len(fake_svc.invocations)}"
+    )
+
 
 # =========================================================================
 # 5. Protocol Tool Dispatch: Verify All 5 Approved Tools
@@ -287,8 +341,8 @@ async def test_protocol_dispatch_all_five_approved_tools():
             "remember_company_instruction",
             arguments={
                 "instruction_text": "Every task must have acceptance criteria.",
-                "context_hint": {"system": "odoo", "resource": "project.task"}
-            }
+                "context_hint": {"system": "odoo", "resource": "project.task"},
+            },
         )
         assert res1.isError is not True
         data1 = json.loads(res1.content[0].text)
@@ -297,8 +351,7 @@ async def test_protocol_dispatch_all_five_approved_tools():
 
         # 2. list_memory_candidates
         res2 = await session.call_tool(
-            "list_memory_candidates",
-            arguments={"status": "pending_review"}
+            "list_memory_candidates", arguments={"status": "pending_review"}
         )
         assert res2.isError is not True
         data2 = json.loads(res2.content[0].text)
@@ -311,8 +364,8 @@ async def test_protocol_dispatch_all_five_approved_tools():
             arguments={
                 "candidate_id": "cand_fake_123",
                 "decision": "approve",
-                "notes": "Approved by owner"
-            }
+                "notes": "Approved by owner",
+            },
         )
         assert res3.isError is not True
         data3 = json.loads(res3.content[0].text)
@@ -327,8 +380,8 @@ async def test_protocol_dispatch_all_five_approved_tools():
                 "application": "project",
                 "resource": "project.task",
                 "operation": "create",
-                "fields": ["definition_of_done"]
-            }
+                "fields": ["definition_of_done"],
+            },
         )
         assert res4.isError is not True
         data4 = json.loads(res4.content[0].text)
@@ -343,8 +396,8 @@ async def test_protocol_dispatch_all_five_approved_tools():
                 "description": "Task created via MCP protocol session",
                 "definition_of_done": ["DoD criterion 1"],
                 "project_id": 142,
-                "correlation_id": "corr_protocol_123"
-            }
+                "correlation_id": "corr_protocol_123",
+            },
         )
         assert res5.isError is not True
         data5 = json.loads(res5.content[0].text)
@@ -358,8 +411,9 @@ async def test_protocol_dispatch_all_five_approved_tools():
         "list_memory_candidates",
         "review_memory_candidate",
         "get_company_context",
-        "create_project_task"
+        "create_project_task",
     ]
+
 
 # =========================================================================
 # 6. Regression Sensitivity: Allowlist Fails if Legacy Tool Added
@@ -383,11 +437,12 @@ async def test_regression_sensitivity_fails_when_legacy_tool_registered():
             "list_memory_candidates",
             "review_memory_candidate",
             "get_company_context",
-            "create_project_task"
+            "create_project_task",
         }
         # The allowlist check MUST fail
         assert advertised_names != expected_names
         assert "extract_memory_candidates" in advertised_names
+
 
 # =========================================================================
 # 7. Preserved Internal ProcessMemoryTools Lifecycle (Legacy Service Layer)
@@ -401,8 +456,7 @@ def test_internal_process_memory_tools_lifecycle():
 
     # 1. Extract
     result = tools.extract_memory_candidates(
-        interaction_text="BOMs must include version numbers.",
-        client_id=cid
+        interaction_text="BOMs must include version numbers.", client_id=cid
     )
     assert len(result.candidates) >= 1
     candidate_id = result.candidates[0].candidate_id
@@ -417,7 +471,7 @@ def test_internal_process_memory_tools_lifecycle():
         decision="approve",
         reviewer="juan_zambrano",
         client_id=cid,
-        notes="Approved via internal tool"
+        notes="Approved via internal tool",
     )
     assert rule is not None
     assert rule.version == 1
@@ -427,6 +481,7 @@ def test_internal_process_memory_tools_lifecycle():
     assert len(active_rules) == 1
     assert active_rules[0].source_candidate_id == candidate_id
 
+
 # =========================================================================
 # 8. End-to-End Lifecycle of 5 Public Tools (Service Integration)
 # =========================================================================
@@ -434,41 +489,49 @@ def test_internal_process_memory_tools_lifecycle():
 def clean_context():
     cid = f"test_co_{uuid.uuid4().hex[:8]}"
     repo = MemoryRepository()
-    repo.upsert_company(Company(
-        company_id=cid,
-        company_slug=cid,
-        name="Test Company",
-        status=CompanyStatus.ACTIVE
-    ))
-    repo.upsert_user(User(
-        user_id="test_user",
-        email="test@example.com",
-        name="Test User",
-        status="active"
-    ))
-    repo.upsert_membership(Membership(
-        membership_id=f"mem_{cid}",
-        company_id=cid,
-        user_id="test_user",
-        role=RoleType.OWNER,
-        status=MembershipStatus.ACTIVE
-    ))
+    repo.upsert_company(
+        Company(
+            company_id=cid,
+            company_slug=cid,
+            name="Test Company",
+            status=CompanyStatus.ACTIVE,
+        )
+    )
+    repo.upsert_user(
+        User(
+            user_id="test_user",
+            email="test@example.com",
+            name="Test User",
+            status="active",
+        )
+    )
+    repo.upsert_membership(
+        Membership(
+            membership_id=f"mem_{cid}",
+            company_id=cid,
+            user_id="test_user",
+            role=RoleType.OWNER,
+            status=MembershipStatus.ACTIVE,
+        )
+    )
     ctx = RequestContext(
         company_id=cid,
         company_slug=cid,
         user_id="test_user",
         email="test@example.com",
-        role=RoleType.OWNER
+        role=RoleType.OWNER,
     )
     set_current_context(ctx)
-    from src.integrations.mock_executor import MockTaskExecutor
     from server import get_default_service
+    from src.integrations.mock_executor import MockTaskExecutor
+
     svc = get_default_service()
     old_executor = svc._injected_executor
     svc._injected_executor = MockTaskExecutor(default_project_id=142)
     yield ctx
     set_current_context(None)
     svc._injected_executor = old_executor
+
 
 def test_public_five_tools_lifecycle(clean_context):
     """Verify end-to-end execution of the 5 public tools."""
@@ -486,16 +549,18 @@ def test_public_five_tools_lifecycle(clean_context):
     assert len(candidates) >= 1
 
     # 3. review_memory_candidate
-    review_json = review_memory_candidate(
-        candidate_id=candidate_id,
-        decision="approve"
-    )
+    review_json = review_memory_candidate(candidate_id=candidate_id, decision="approve")
     review_data = json.loads(review_json)
     assert review_data["status"] == "approved"
     assert review_data["rule_id"] is not None
 
     # 4. get_company_context
-    context_json = get_company_context(system="odoo", application="project", resource="project.task", operation="create")
+    context_json = get_company_context(
+        system="odoo",
+        application="project",
+        resource="project.task",
+        operation="create",
+    )
     context_data = json.loads(context_json)
     assert len(context_data["rules"]) >= 1
 
@@ -504,8 +569,7 @@ def test_public_five_tools_lifecycle(clean_context):
         title="[PM-TEST] Public tool task",
         description="Verify public task tool works",
         definition_of_done=["Task is verified"],
-        correlation_id=f"corr_{uuid.uuid4().hex}"
+        correlation_id=f"corr_{uuid.uuid4().hex}",
     )
     task_data = json.loads(task_json)
     assert task_data["status"] in ("created", "needs_clarification")
-

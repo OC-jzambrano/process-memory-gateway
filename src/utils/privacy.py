@@ -1,13 +1,16 @@
 import re
-from typing import Tuple, Any, Optional, Set
+from typing import Any
 
 # Common regex patterns for PII and sensitive data
-EMAIL_PATTERN = re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b')
-CREDIT_CARD_PATTERN = re.compile(r'\b(?:\d{4}[-\s]?){3}\d{4}\b')
-API_KEY_PATTERN = re.compile(r'\b(?:AKIA[0-9A-Z]{16}|[0-9a-zA-Z_-]{32,64})\b')
-PHONE_PATTERN = re.compile(r'\b(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b')
+EMAIL_PATTERN = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b")
+CREDIT_CARD_PATTERN = re.compile(r"\b(?:\d{4}[-\s]?){3}\d{4}\b")
+API_KEY_PATTERN = re.compile(r"\b(?:AKIA[0-9A-Z]{16}|[0-9a-zA-Z_-]{32,64})\b")
+PHONE_PATTERN = re.compile(
+    r"\b(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b"
+)
 
-def redact_sensitive_text(text: str) -> Tuple[str, int]:
+
+def redact_sensitive_text(text: str) -> tuple[str, int]:
     """
     Redacts sensitive PII (emails, cards, keys, phones) from text prior to cloud transmission.
     Returns (redacted_text, count_of_redactions).
@@ -49,10 +52,11 @@ SENSITIVE_KEY_PATTERNS = {
     "credential",
     "private_key",
     "access_key",
-    "authorization"
+    "authorization",
 }
 
-def sanitize_evidence(data: Any, known_secrets: Optional[Set[str]] = None) -> Any:
+
+def sanitize_evidence(data: Any, known_secrets: set[str] | None = None) -> Any:
     """
     Recursively sanitizes evidence data prior to persistence or logging.
     - Replaces values for keys matching sensitive words (password, api_key, secret, etc.)
@@ -88,7 +92,9 @@ def sanitize_evidence(data: Any, known_secrets: Optional[Set[str]] = None) -> An
         text = data
         if known_secrets:
             # Sort known secrets by length descending to match longest substrings first
-            valid_secrets = sorted([s for s in known_secrets if s and len(s) >= 2], key=len, reverse=True)
+            valid_secrets = sorted(
+                [s for s in known_secrets if s and len(s) >= 2], key=len, reverse=True
+            )
             for s in valid_secrets:
                 text = text.replace(s, "[REDACTED_KNOWN_SECRET]")
         redacted, _ = redact_sensitive_text(text)

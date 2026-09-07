@@ -1,21 +1,23 @@
-from typing import Optional, List
 from pydantic import BaseModel, Field
-from src.models.schemas import CanonicalRule
-from src.models.enums import RunStatus, ConstraintKind
+
 from src.governance.scope_matcher import filter_and_order_rules
+from src.models.enums import ConstraintKind, RunStatus
+from src.models.schemas import CanonicalRule
+
 
 class TaskValidationResult(BaseModel):
     is_valid: bool
     status: RunStatus = RunStatus.CREATED
-    missing_fields: List[str] = Field(default_factory=list)
-    applied_rules: List[CanonicalRule] = Field(default_factory=list)
-    applied_rule_ids: List[str] = Field(default_factory=list)
+    missing_fields: list[str] = Field(default_factory=list)
+    applied_rules: list[CanonicalRule] = Field(default_factory=list)
+    applied_rule_ids: list[str] = Field(default_factory=list)
     message: str
+
 
 class TaskValidator:
     """
     Evaluates task creation readiness against active canonical company memory.
-    
+
     Principles:
     1. Validator capability exists in code, but no company rule is seeded by default.
     2. A candidate rule in pending_review has zero operational effect.
@@ -29,16 +31,16 @@ class TaskValidator:
         self,
         title: str,
         description: str,
-        definition_of_done: Optional[List[str]],
-        active_rules: List[CanonicalRule],
-        project_id: Optional[int] = None
+        definition_of_done: list[str] | None,
+        active_rules: list[CanonicalRule],
+        project_id: int | None = None,
     ) -> TaskValidationResult:
         if not title or not title.strip():
             return TaskValidationResult(
                 is_valid=False,
                 status=RunStatus.NEEDS_CLARIFICATION,
                 missing_fields=["title"],
-                message="Task title is required."
+                message="Task title is required.",
             )
 
         # Filter applicable rules matching task creation scope
@@ -49,12 +51,12 @@ class TaskValidator:
             resource="project.task",
             operation="create",
             fields=["definition_of_done"],
-            process_name="project"
+            process_name="project",
         )
 
-        applied_rules: List[CanonicalRule] = []
-        applied_rule_ids: List[str] = []
-        missing_fields: List[str] = []
+        applied_rules: list[CanonicalRule] = []
+        applied_rule_ids: list[str] = []
+        missing_fields: list[str] = []
 
         for rule in applicable_rules:
             constraint = rule.structured_constraint
@@ -69,7 +71,8 @@ class TaskValidator:
                 if target_field == "definition_of_done":
                     # Check definition_of_done content
                     valid_items = [
-                        item.strip() for item in (definition_of_done or [])
+                        item.strip()
+                        for item in (definition_of_done or [])
                         if isinstance(item, str) and item.strip()
                     ]
 
@@ -90,7 +93,7 @@ class TaskValidator:
                 message=(
                     f"Task creation blocked: Company instruction {rule_refs} requires at least "
                     f"1 non-empty Definition of Done item. Please provide 'definition_of_done'."
-                )
+                ),
             )
 
         return TaskValidationResult(
@@ -99,5 +102,5 @@ class TaskValidator:
             missing_fields=[],
             applied_rules=applied_rules,
             applied_rule_ids=applied_rule_ids,
-            message="Task readiness validation passed."
+            message="Task readiness validation passed.",
         )

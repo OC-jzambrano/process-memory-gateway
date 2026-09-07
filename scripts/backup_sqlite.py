@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-import os
+import argparse
 import gzip
+import logging
+import os
 import shutil
 import sqlite3
-import argparse
-import logging
-from pathlib import Path
 from datetime import datetime, timezone
+from pathlib import Path
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
+)
 logger = logging.getLogger(__name__)
+
 
 def perform_consistent_backup(src_db_path: Path, backup_output_path: Path) -> None:
     """
@@ -49,25 +52,27 @@ def perform_consistent_backup(src_db_path: Path, backup_output_path: Path) -> No
     temp_backup.rename(backup_output_path)
     logger.info("Consistent SQLite backup created at %s", backup_output_path)
 
+
 def compress_file(input_path: Path, output_gz_path: Path) -> Path:
     """Compresses the backup file with gzip."""
-    with open(input_path, "rb") as f_in:
-        with gzip.open(output_gz_path, "wb") as f_out:
-            shutil.copyfileobj(f_in, f_out)
+    with open(input_path, "rb") as f_in, gzip.open(output_gz_path, "wb") as f_out:
+        shutil.copyfileobj(f_in, f_out)
     return output_gz_path
+
 
 def upload_to_s3(file_path: Path, bucket: str, s3_key: str) -> None:
     """Uploads backup file to S3 with server-side encryption enabled."""
     import boto3
+
     s3 = boto3.client("s3")
-    logger.info("Uploading %s to s3://%s/%s (AES256 encrypted)...", file_path, bucket, s3_key)
+    logger.info(
+        "Uploading %s to s3://%s/%s (AES256 encrypted)...", file_path, bucket, s3_key
+    )
     s3.upload_file(
-        str(file_path),
-        bucket,
-        s3_key,
-        ExtraArgs={"ServerSideEncryption": "AES256"}
+        str(file_path), bucket, s3_key, ExtraArgs={"ServerSideEncryption": "AES256"}
     )
     logger.info("Upload completed successfully.")
+
 
 def restore_backup(backup_gz_path: Path, target_db_path: Path) -> None:
     """Restores database from compressed or plain backup and verifies integrity."""
@@ -76,9 +81,8 @@ def restore_backup(backup_gz_path: Path, target_db_path: Path) -> None:
     temp_dest = target_db_path.with_suffix(".restoring.tmp")
 
     if str(backup_gz_path).endswith(".gz"):
-        with gzip.open(backup_gz_path, "rb") as f_in:
-            with open(temp_dest, "wb") as f_out:
-                shutil.copyfileobj(f_in, f_out)
+        with gzip.open(backup_gz_path, "rb") as f_in, open(temp_dest, "wb") as f_out:
+            shutil.copyfileobj(f_in, f_out)
     else:
         shutil.copyfile(backup_gz_path, temp_dest)
 
@@ -94,18 +98,33 @@ def restore_backup(backup_gz_path: Path, target_db_path: Path) -> None:
         conn.close()
 
     if target_db_path.exists():
-        backup_old = target_db_path.with_suffix(f".pre_restore_{int(datetime.now().timestamp())}")
+        backup_old = target_db_path.with_suffix(
+            f".pre_restore_{int(datetime.now(timezone.utc).timestamp())}"
+        )
         target_db_path.rename(backup_old)
         logger.info("Existing database moved to %s", backup_old)
 
     temp_dest.rename(target_db_path)
     logger.info("Database restoration complete at %s", target_db_path)
 
+
 def main():
-    parser = argparse.ArgumentParser(description="Process Memory SQLite Consistent Backup and Restore Utility")
-    parser.add_argument("--db-path", default=os.getenv("PROCESS_MEMORY_DB_PATH", "data/process_memory.db"), help="Path to SQLite DB")
-    parser.add_argument("--s3-bucket", default=os.getenv("BACKUP_S3_BUCKET"), help="S3 bucket for backups")
-    parser.add_argument("--local-dir", default="data/backups", help="Local backup directory")
+    parser = argparse.ArgumentParser(
+        description="Process Memory SQLite Consistent Backup and Restore Utility"
+    )
+    parser.add_argument(
+        "--db-path",
+        default=os.getenv("PROCESS_MEMORY_DB_PATH", "data/process_memory.db"),
+        help="Path to SQLite DB",
+    )
+    parser.add_argument(
+        "--s3-bucket",
+        default=os.getenv("BACKUP_S3_BUCKET"),
+        help="S3 bucket for backups",
+    )
+    parser.add_argument(
+        "--local-dir", default="data/backups", help="Local backup directory"
+    )
     parser.add_argument("--restore", help="Path to backup file (.db or .gz) to restore")
     parser.add_argument("--restore-target", help="Target path for restored database")
 
@@ -136,6 +155,7 @@ def main():
         upload_to_s3(backup_gz, args.s3_bucket, s3_key)
 
     logger.info("Backup workflow finished. Stored at %s", backup_gz)
+
 
 if __name__ == "__main__":
     main()

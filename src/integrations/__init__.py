@@ -1,11 +1,15 @@
 from src.integrations.base_executor import TaskExecutor
-from src.integrations.odoo17_xmlrpc import Odoo17XmlRpcExecutor, OdooExecutionError, OdooAccessDeniedError
 from src.integrations.mock_executor import MockTaskExecutor
+from src.integrations.odoo17_xmlrpc import (
+    Odoo17XmlRpcExecutor,
+    OdooAccessDeniedError,
+    OdooExecutionError,
+)
 
 __all__ = [
-    "TaskExecutor",
-    "Odoo17XmlRpcExecutor",
     "MockTaskExecutor",
+    "Odoo17XmlRpcExecutor",
+    "OdooAccessDeniedError",
     "OdooExecutionError",
-    "OdooAccessDeniedError"
+    "TaskExecutor",
 ]

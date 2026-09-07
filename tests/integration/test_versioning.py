@@ -1,5 +1,6 @@
 from src.models.enums import DecisionType
 
+
 def test_triple_supersede_chain(repo, make_candidate):
     make_candidate(candidate_id="cand_v1", rule_text="Version 1 rule")
     v1 = repo.review_candidate("cand_v1", DecisionType.APPROVE, "reviewer")

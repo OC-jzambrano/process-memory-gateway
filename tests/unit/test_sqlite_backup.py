@@ -1,6 +1,12 @@
 import sqlite3
-from scripts.backup_sqlite import perform_consistent_backup, compress_file, restore_backup
+
+from scripts.backup_sqlite import (
+    compress_file,
+    perform_consistent_backup,
+    restore_backup,
+)
 from src.storage.db import init_db
+
 
 def test_consistent_backup_and_restore(tmp_path):
     # 1. Create a source database with WAL mode and sample records
@@ -10,8 +16,12 @@ def test_consistent_backup_and_restore(tmp_path):
     conn = sqlite3.connect(str(src_db))
     with conn:
         conn.execute("PRAGMA journal_mode = WAL;")
-        conn.execute("INSERT INTO clients (client_id, client_name) VALUES ('client_test', 'Test Client');")
-        conn.execute("INSERT INTO companies (company_id, company_slug, name) VALUES ('co_1', 'co_1', 'Company 1');")
+        conn.execute(
+            "INSERT INTO clients (client_id, client_name) VALUES ('client_test', 'Test Client');"
+        )
+        conn.execute(
+            "INSERT INTO companies (company_id, company_slug, name) VALUES ('co_1', 'co_1', 'Company 1');"
+        )
     conn.close()
 
     # 2. Perform online consistent backup
@@ -37,11 +47,15 @@ def test_consistent_backup_and_restore(tmp_path):
 
     # 5. Verify restored database has identical records
     rconn = sqlite3.connect(str(restored_db))
-    r_client = rconn.execute("SELECT client_name FROM clients WHERE client_id = 'client_test';").fetchone()
+    r_client = rconn.execute(
+        "SELECT client_name FROM clients WHERE client_id = 'client_test';"
+    ).fetchone()
     assert r_client is not None
     assert r_client[0] == "Test Client"
 
-    r_co = rconn.execute("SELECT name FROM companies WHERE company_id = 'co_1';").fetchone()
+    r_co = rconn.execute(
+        "SELECT name FROM companies WHERE company_id = 'co_1';"
+    ).fetchone()
     assert r_co is not None
     assert r_co[0] == "Company 1"
     rconn.close()

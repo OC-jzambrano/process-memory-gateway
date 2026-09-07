@@ -7,15 +7,18 @@ in-memory protocol sessions in:
 
 This module provides fast supplementary unit-level verification on Python callables.
 """
+
 import inspect
+
 import server
 from server import (
-    remember_company_instruction,
-    list_memory_candidates,
-    review_memory_candidate,
+    create_project_task,
     get_company_context,
-    create_project_task
+    list_memory_candidates,
+    remember_company_instruction,
+    review_memory_candidate,
 )
+
 
 def test_public_mcp_tools_contain_no_caller_controlled_identity_args():
     """
@@ -23,21 +26,32 @@ def test_public_mcp_tools_contain_no_caller_controlled_identity_args():
     reviewer, role, or principal arguments. Identity is strictly derived
     from authenticated request context.
     """
-    forbidden_args = {"client_id", "company_id", "reviewer", "reviewer_user_id", "role", "principal", "actor"}
+    forbidden_args = {
+        "client_id",
+        "company_id",
+        "reviewer",
+        "reviewer_user_id",
+        "role",
+        "principal",
+        "actor",
+    }
 
     tools = [
         remember_company_instruction,
         list_memory_candidates,
         review_memory_candidate,
         get_company_context,
-        create_project_task
+        create_project_task,
     ]
 
     for tool_func in tools:
         sig = inspect.signature(tool_func)
         param_names = set(sig.parameters.keys())
         overlap = param_names.intersection(forbidden_args)
-        assert not overlap, f"Tool '{tool_func.__name__}' exposes forbidden identity parameters: {overlap}"
+        assert not overlap, (
+            f"Tool '{tool_func.__name__}' exposes forbidden identity parameters: {overlap}"
+        )
+
 
 def test_server_module_does_not_export_legacy_tools():
     """
@@ -47,8 +61,9 @@ def test_server_module_does_not_export_legacy_tools():
         "extract_memory_candidates",
         "get_candidate_rules",
         "get_active_rules",
-        "review_candidate_rule"
+        "review_candidate_rule",
     ]
     for legacy_name in legacy_tools:
-        assert not hasattr(server, legacy_name), f"Legacy tool '{legacy_name}' must not be exposed on server module"
-
+        assert not hasattr(server, legacy_name), (
+            f"Legacy tool '{legacy_name}' must not be exposed on server module"
+        )

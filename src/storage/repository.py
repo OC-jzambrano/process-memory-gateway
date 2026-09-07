@@ -1,255 +1,304 @@
 import json
-import uuid
 import sqlite3
+import uuid
 from datetime import datetime, timezone
-from typing import List, Optional, Union, Dict, Any, Tuple
 from pathlib import Path
+from typing import Any
 
-from src.storage.db import db_session, init_db, DEFAULT_DB_PATH
-from src.storage.base_repository import BaseRepository
-from src.models.schemas import (
-    Company,
-    User,
-    Membership,
-    OdooConnectionConfig,
-    Client,
-    BusinessProcess,
-    ExtractionSession,
-    CandidateRule,
-    CanonicalRule,
-    ReviewEvent,
-    ExecutionRunRecord,
-    ExecutionEventRecord,
-    ActionContext,
-    DeterministicConstraint
-)
 from src.models.enums import (
-    RuleStatus,
+    CompanyStatus,
     DecisionType,
     EventType,
-    RoleType,
-    RunStatus,
+    ExecutionEventType,
     MembershipStatus,
-    CompanyStatus,
-    ExecutionEventType
+    RoleType,
+    RuleStatus,
+    RunStatus,
 )
+from src.models.schemas import (
+    ActionContext,
+    BusinessProcess,
+    CandidateRule,
+    CanonicalRule,
+    Client,
+    Company,
+    DeterministicConstraint,
+    ExecutionEventRecord,
+    ExecutionRunRecord,
+    ExtractionSession,
+    Membership,
+    OdooConnectionConfig,
+    ReviewEvent,
+    User,
+)
+from src.storage.base_repository import BaseRepository
+from src.storage.db import DEFAULT_DB_PATH, db_session, init_db
+
 
 class MemoryRepository(BaseRepository):
-    def __init__(self, db_path: Union[str, Path] = DEFAULT_DB_PATH):
+    def __init__(self, db_path: str | Path = DEFAULT_DB_PATH):
         self.db_path = db_path
         init_db(self.db_path)
 
     def _now(self) -> str:
         return datetime.now(timezone.utc).isoformat()
 
-    def _serialize_json(self, obj: Any) -> Optional[str]:
+    def _serialize_json(self, obj: Any) -> str | None:
         if obj is None:
             return None
         if hasattr(obj, "model_dump"):
             return json.dumps(obj.model_dump())
         return json.dumps(obj)
 
-    def _deserialize_scope(self, data: Optional[str]) -> Optional[ActionContext]:
+    def _deserialize_scope(self, data: str | None) -> ActionContext | None:
         if not data:
             return None
         try:
             d = json.loads(data)
             return ActionContext(**d)
-        except Exception:
+        except (ValueError, TypeError):
             return None
 
-    def _deserialize_constraint(self, data: Optional[str]) -> Optional[DeterministicConstraint]:
+    def _deserialize_constraint(
+        self, data: str | None
+    ) -> DeterministicConstraint | None:
         if not data:
             return None
         try:
             d = json.loads(data)
             return DeterministicConstraint(**d)
-        except Exception:
+        except (ValueError, TypeError):
             return None
 
     # --- 1. COMPANIES / TENANTS ---
     def upsert_company(self, company: Company) -> Company:
         now = self._now()
-        with db_session(self.db_path) as conn:
-            with conn:
-                conn.execute(
-                    """
-                    INSERT INTO companies (company_id, company_slug, name, status, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(company_id) DO UPDATE SET
-                        company_slug=excluded.company_slug,
-                        name=excluded.name,
-                        status=excluded.status,
-                        updated_at=?
-                    """,
-                    (
-                        company.company_id, company.company_slug, company.name,
-                        company.status.value if isinstance(company.status, CompanyStatus) else company.status,
-                        company.created_at or now, company.updated_at or now, now
-                    )
-                )
-                # Keep clients table in sync for backward compatibility
-                conn.execute(
-                    """
-                    INSERT INTO clients (client_id, client_name, industry, notes, created_at, updated_at)
-                    VALUES (?, ?, 'default', 'synced from company', ?, ?)
-                    ON CONFLICT(client_id) DO UPDATE SET
-                        client_name=excluded.client_name,
-                        updated_at=?
-                    """,
-                    (company.company_id, company.name, company.created_at or now, now, now)
-                )
+        with db_session(self.db_path) as conn, conn:
+            conn.execute(
+                """
+                INSERT INTO companies (company_id, company_slug, name, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(company_id) DO UPDATE SET
+                    company_slug=excluded.company_slug,
+                    name=excluded.name,
+                    status=excluded.status,
+                    updated_at=?
+                """,
+                (
+                    company.company_id,
+                    company.company_slug,
+                    company.name,
+                    company.status.value
+                    if isinstance(company.status, CompanyStatus)
+                    else company.status,
+                    company.created_at or now,
+                    company.updated_at or now,
+                    now,
+                ),
+            )
+            # Keep clients table in sync for backward compatibility
+            conn.execute(
+                """
+                INSERT INTO clients (client_id, client_name, industry, notes, created_at, updated_at)
+                VALUES (?, ?, 'default', 'synced from company', ?, ?)
+                ON CONFLICT(client_id) DO UPDATE SET
+                    client_name=excluded.client_name,
+                    updated_at=?
+                """,
+                (
+                    company.company_id,
+                    company.name,
+                    company.created_at or now,
+                    now,
+                    now,
+                ),
+            )
         return company
 
-    def get_company(self, company_id: str) -> Optional[Company]:
+    def get_company(self, company_id: str) -> Company | None:
         with db_session(self.db_path) as conn:
             cursor = conn.cursor()
-            row = cursor.execute("SELECT * FROM companies WHERE company_id = ?", (company_id,)).fetchone()
+            row = cursor.execute(
+                "SELECT * FROM companies WHERE company_id = ?", (company_id,)
+            ).fetchone()
             if row:
                 d = dict(row)
                 return Company(
                     company_id=d["company_id"],
                     company_slug=d["company_slug"],
                     name=d["name"],
-                    status=CompanyStatus(d["status"]) if d["status"] in ("active", "suspended") else CompanyStatus.ACTIVE,
+                    status=CompanyStatus(d["status"])
+                    if d["status"] in ("active", "suspended")
+                    else CompanyStatus.ACTIVE,
                     created_at=d.get("created_at"),
-                    updated_at=d.get("updated_at")
+                    updated_at=d.get("updated_at"),
                 )
         return None
 
-    def get_company_by_slug(self, company_slug: str) -> Optional[Company]:
+    def get_company_by_slug(self, company_slug: str) -> Company | None:
         with db_session(self.db_path) as conn:
             cursor = conn.cursor()
-            row = cursor.execute("SELECT * FROM companies WHERE company_slug = ?", (company_slug,)).fetchone()
+            row = cursor.execute(
+                "SELECT * FROM companies WHERE company_slug = ?", (company_slug,)
+            ).fetchone()
             if row:
                 d = dict(row)
                 return Company(
                     company_id=d["company_id"],
                     company_slug=d["company_slug"],
                     name=d["name"],
-                    status=CompanyStatus(d["status"]) if d["status"] in ("active", "suspended") else CompanyStatus.ACTIVE,
+                    status=CompanyStatus(d["status"])
+                    if d["status"] in ("active", "suspended")
+                    else CompanyStatus.ACTIVE,
                     created_at=d.get("created_at"),
-                    updated_at=d.get("updated_at")
+                    updated_at=d.get("updated_at"),
                 )
         return None
 
     # Backward compatibility for clients
     def upsert_client(self, client: Client) -> Client:
         now = self._now()
-        with db_session(self.db_path) as conn:
-            with conn:
-                conn.execute(
-                    """
-                    INSERT INTO clients (client_id, client_name, industry, odoo_url, notes, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(client_id) DO UPDATE SET
-                        client_name=excluded.client_name,
-                        industry=excluded.industry,
-                        odoo_url=excluded.odoo_url,
-                        notes=excluded.notes,
-                        updated_at=?
-                    """,
-                    (
-                        client.client_id, client.client_name, client.industry,
-                        client.odoo_url, client.notes, now, now, now
-                    )
-                )
-                # Keep companies table in sync
-                conn.execute(
-                    """
-                    INSERT INTO companies (company_id, company_slug, name, status, created_at, updated_at)
-                    VALUES (?, ?, ?, 'active', ?, ?)
-                    ON CONFLICT(company_id) DO NOTHING
-                    """,
-                    (client.client_id, client.client_id, client.client_name, now, now)
-                )
+        with db_session(self.db_path) as conn, conn:
+            conn.execute(
+                """
+                INSERT INTO clients (client_id, client_name, industry, odoo_url, notes, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(client_id) DO UPDATE SET
+                    client_name=excluded.client_name,
+                    industry=excluded.industry,
+                    odoo_url=excluded.odoo_url,
+                    notes=excluded.notes,
+                    updated_at=?
+                """,
+                (
+                    client.client_id,
+                    client.client_name,
+                    client.industry,
+                    client.odoo_url,
+                    client.notes,
+                    now,
+                    now,
+                    now,
+                ),
+            )
+            # Keep companies table in sync
+            conn.execute(
+                """
+                INSERT INTO companies (company_id, company_slug, name, status, created_at, updated_at)
+                VALUES (?, ?, ?, 'active', ?, ?)
+                ON CONFLICT(company_id) DO NOTHING
+                """,
+                (client.client_id, client.client_id, client.client_name, now, now),
+            )
         return client
 
-    def get_client(self, client_id: str) -> Optional[Client]:
+    def get_client(self, client_id: str) -> Client | None:
         with db_session(self.db_path) as conn:
             cursor = conn.cursor()
-            row = cursor.execute("SELECT * FROM clients WHERE client_id = ?", (client_id,)).fetchone()
+            row = cursor.execute(
+                "SELECT * FROM clients WHERE client_id = ?", (client_id,)
+            ).fetchone()
             if row:
                 return Client(**dict(row))
         return None
 
     def add_process(self, process: BusinessProcess) -> BusinessProcess:
         now = self._now()
-        with db_session(self.db_path) as conn:
-            with conn:
-                conn.execute(
-                    """
-                    INSERT INTO business_processes (process_id, client_id, process_name, description, created_at)
-                    VALUES (?, ?, ?, ?, ?)
-                    ON CONFLICT(client_id, process_name) DO UPDATE SET
-                        description=excluded.description
-                    """,
-                    (process.process_id, process.client_id, process.process_name, process.description, now)
-                )
+        with db_session(self.db_path) as conn, conn:
+            conn.execute(
+                """
+                INSERT INTO business_processes (process_id, client_id, process_name, description, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(client_id, process_name) DO UPDATE SET
+                    description=excluded.description
+                """,
+                (
+                    process.process_id,
+                    process.client_id,
+                    process.process_name,
+                    process.description,
+                    now,
+                ),
+            )
         return process
 
     # --- 2. USERS & MEMBERSHIPS ---
     def upsert_user(self, user: User) -> User:
         now = self._now()
-        with db_session(self.db_path) as conn:
-            with conn:
-                conn.execute(
-                    """
-                    INSERT INTO users (user_id, email, name, cognito_sub, status, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(user_id) DO UPDATE SET
-                        email=excluded.email,
-                        name=excluded.name,
-                        cognito_sub=excluded.cognito_sub,
-                        status=excluded.status
-                    """,
-                    (user.user_id, user.email, user.name, user.cognito_sub, user.status, user.created_at or now)
-                )
+        with db_session(self.db_path) as conn, conn:
+            conn.execute(
+                """
+                INSERT INTO users (user_id, email, name, cognito_sub, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    email=excluded.email,
+                    name=excluded.name,
+                    cognito_sub=excluded.cognito_sub,
+                    status=excluded.status
+                """,
+                (
+                    user.user_id,
+                    user.email,
+                    user.name,
+                    user.cognito_sub,
+                    user.status,
+                    user.created_at or now,
+                ),
+            )
         return user
 
-    def get_user(self, user_id: str) -> Optional[User]:
+    def get_user(self, user_id: str) -> User | None:
         with db_session(self.db_path) as conn:
             cursor = conn.cursor()
-            row = cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
+            row = cursor.execute(
+                "SELECT * FROM users WHERE user_id = ?", (user_id,)
+            ).fetchone()
             if row:
                 return User(**dict(row))
         return None
 
-    def get_user_by_cognito_sub(self, cognito_sub: str) -> Optional[User]:
+    def get_user_by_cognito_sub(self, cognito_sub: str) -> User | None:
         with db_session(self.db_path) as conn:
             cursor = conn.cursor()
-            row = cursor.execute("SELECT * FROM users WHERE cognito_sub = ?", (cognito_sub,)).fetchone()
+            row = cursor.execute(
+                "SELECT * FROM users WHERE cognito_sub = ?", (cognito_sub,)
+            ).fetchone()
             if row:
                 return User(**dict(row))
         return None
 
     def upsert_membership(self, membership: Membership) -> Membership:
         now = self._now()
-        with db_session(self.db_path) as conn:
-            with conn:
-                conn.execute(
-                    """
-                    INSERT INTO memberships (membership_id, company_id, user_id, role, status, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(company_id, user_id) DO UPDATE SET
-                        role=excluded.role,
-                        status=excluded.status
-                    """,
-                    (
-                        membership.membership_id, membership.company_id, membership.user_id,
-                        membership.role.value if isinstance(membership.role, RoleType) else membership.role,
-                        membership.status.value if isinstance(membership.status, MembershipStatus) else membership.status,
-                        membership.created_at or now
-                    )
-                )
+        with db_session(self.db_path) as conn, conn:
+            conn.execute(
+                """
+                INSERT INTO memberships (membership_id, company_id, user_id, role, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(company_id, user_id) DO UPDATE SET
+                    role=excluded.role,
+                    status=excluded.status
+                """,
+                (
+                    membership.membership_id,
+                    membership.company_id,
+                    membership.user_id,
+                    membership.role.value
+                    if isinstance(membership.role, RoleType)
+                    else membership.role,
+                    membership.status.value
+                    if isinstance(membership.status, MembershipStatus)
+                    else membership.status,
+                    membership.created_at or now,
+                ),
+            )
         return membership
 
-    def get_membership(self, company_id: str, user_id: str) -> Optional[Membership]:
+    def get_membership(self, company_id: str, user_id: str) -> Membership | None:
         with db_session(self.db_path) as conn:
             cursor = conn.cursor()
             row = cursor.execute(
                 "SELECT * FROM memberships WHERE company_id = ? AND user_id = ?",
-                (company_id, user_id)
+                (company_id, user_id),
             ).fetchone()
             if row:
                 d = dict(row)
@@ -257,41 +306,52 @@ class MemoryRepository(BaseRepository):
                     membership_id=d["membership_id"],
                     company_id=d["company_id"],
                     user_id=d["user_id"],
-                    role=RoleType(d["role"]) if d["role"] in [r.value for r in RoleType] else RoleType.MEMBER,
-                    status=MembershipStatus(d["status"]) if d["status"] in [s.value for s in MembershipStatus] else MembershipStatus.ACTIVE,
-                    created_at=d.get("created_at")
+                    role=RoleType(d["role"])
+                    if d["role"] in [r.value for r in RoleType]
+                    else RoleType.MEMBER,
+                    status=MembershipStatus(d["status"])
+                    if d["status"] in [s.value for s in MembershipStatus]
+                    else MembershipStatus.ACTIVE,
+                    created_at=d.get("created_at"),
                 )
         return None
 
     # --- 3. ODOO CONNECTIONS ---
-    def upsert_odoo_connection(self, config: OdooConnectionConfig) -> OdooConnectionConfig:
+    def upsert_odoo_connection(
+        self, config: OdooConnectionConfig
+    ) -> OdooConnectionConfig:
         now = self._now()
-        with db_session(self.db_path) as conn:
-            with conn:
-                conn.execute(
-                    """
-                    INSERT INTO odoo_connections (connection_id, company_id, secret_arn, odoo_url, odoo_db, default_project_id, status, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(company_id) DO UPDATE SET
-                        secret_arn=excluded.secret_arn,
-                        odoo_url=excluded.odoo_url,
-                        odoo_db=excluded.odoo_db,
-                        default_project_id=excluded.default_project_id,
-                        status=excluded.status
-                    """,
-                    (
-                        config.connection_id, config.company_id, config.secret_arn,
-                        config.odoo_url, config.odoo_db, config.default_project_id,
-                        config.status,
-                        config.created_at or now
-                    )
-                )
+        with db_session(self.db_path) as conn, conn:
+            conn.execute(
+                """
+                INSERT INTO odoo_connections (connection_id, company_id, secret_arn, odoo_url, odoo_db, default_project_id, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(company_id) DO UPDATE SET
+                    secret_arn=excluded.secret_arn,
+                    odoo_url=excluded.odoo_url,
+                    odoo_db=excluded.odoo_db,
+                    default_project_id=excluded.default_project_id,
+                    status=excluded.status
+                """,
+                (
+                    config.connection_id,
+                    config.company_id,
+                    config.secret_arn,
+                    config.odoo_url,
+                    config.odoo_db,
+                    config.default_project_id,
+                    config.status,
+                    config.created_at or now,
+                ),
+            )
         return config
 
-    def get_odoo_connection(self, company_id: str) -> Optional[OdooConnectionConfig]:
+    def get_odoo_connection(self, company_id: str) -> OdooConnectionConfig | None:
         with db_session(self.db_path) as conn:
             cursor = conn.cursor()
-            row = cursor.execute("SELECT * FROM odoo_connections WHERE company_id = ?", (company_id,)).fetchone()
+            row = cursor.execute(
+                "SELECT * FROM odoo_connections WHERE company_id = ?", (company_id,)
+            ).fetchone()
             if row:
                 return OdooConnectionConfig(**dict(row))
         return None
@@ -299,58 +359,76 @@ class MemoryRepository(BaseRepository):
     # --- 4. EXTRACTION SESSIONS & CANDIDATES ---
     def create_session(self, session: ExtractionSession) -> ExtractionSession:
         now = self._now()
-        with db_session(self.db_path) as conn:
-            with conn:
-                conn.execute(
-                    """
-                    INSERT INTO extraction_sessions 
-                    (session_id, client_id, process_name, source_type, interaction_text, model_id, model_temperature, candidates_extracted, extracted_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        session.session_id, session.client_id, session.process_name,
-                        session.source_type.value, session.interaction_text, session.model_id,
-                        session.model_temperature, session.candidates_extracted, now
-                    )
-                )
+        with db_session(self.db_path) as conn, conn:
+            conn.execute(
+                """
+                INSERT INTO extraction_sessions 
+                (session_id, client_id, process_name, source_type, interaction_text, model_id, model_temperature, candidates_extracted, extracted_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    session.session_id,
+                    session.client_id,
+                    session.process_name,
+                    session.source_type.value,
+                    session.interaction_text,
+                    session.model_id,
+                    session.model_temperature,
+                    session.candidates_extracted,
+                    now,
+                ),
+            )
         return session
 
-    def save_candidates(self, candidates: List[CandidateRule]) -> List[CandidateRule]:
+    def save_candidates(self, candidates: list[CandidateRule]) -> list[CandidateRule]:
         if not candidates:
             return []
         now = self._now()
-        with db_session(self.db_path) as conn:
-            with conn:
-                for c in candidates:
-                    scope_json = self._serialize_json(c.structured_scope)
-                    constraint_json = self._serialize_json(c.structured_constraint)
-                    conn.execute(
-                        """
-                        INSERT INTO memory_candidates
-                        (candidate_id, session_id, client_id, process_name, rule_text, rule_type, severity, enforcement_mode, source_quote, confidence, status, structured_scope_json, structured_constraint_json, promoted_to_rule_id, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            c.candidate_id, c.session_id, c.client_id, c.process_name,
-                            c.rule_text, c.rule_type.value, c.severity.value, c.enforcement_mode.value,
-                            c.source_quote, c.confidence, c.status.value, scope_json, constraint_json,
-                            c.promoted_to_rule_id, c.created_at or now, c.updated_at or now
-                        )
-                    )
+        with db_session(self.db_path) as conn, conn:
+            for c in candidates:
+                scope_json = self._serialize_json(c.structured_scope)
+                constraint_json = self._serialize_json(c.structured_constraint)
+                conn.execute(
+                    """
+                    INSERT INTO memory_candidates
+                    (candidate_id, session_id, client_id, process_name, rule_text, rule_type, severity, enforcement_mode, source_quote, confidence, status, structured_scope_json, structured_constraint_json, promoted_to_rule_id, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        c.candidate_id,
+                        c.session_id,
+                        c.client_id,
+                        c.process_name,
+                        c.rule_text,
+                        c.rule_type.value,
+                        c.severity.value,
+                        c.enforcement_mode.value,
+                        c.source_quote,
+                        c.confidence,
+                        c.status.value,
+                        scope_json,
+                        constraint_json,
+                        c.promoted_to_rule_id,
+                        c.created_at or now,
+                        c.updated_at or now,
+                    ),
+                )
         return candidates
 
-    def get_candidate(self, candidate_id: str, client_id: Optional[str] = None) -> Optional[CandidateRule]:
+    def get_candidate(
+        self, candidate_id: str, client_id: str | None = None
+    ) -> CandidateRule | None:
         with db_session(self.db_path) as conn:
             cursor = conn.cursor()
             if client_id:
                 row = cursor.execute(
                     "SELECT * FROM memory_candidates WHERE candidate_id = ? AND client_id = ?",
-                    (candidate_id, client_id)
+                    (candidate_id, client_id),
                 ).fetchone()
             else:
                 row = cursor.execute(
                     "SELECT * FROM memory_candidates WHERE candidate_id = ?",
-                    (candidate_id,)
+                    (candidate_id,),
                 ).fetchone()
             if row:
                 d = dict(row)
@@ -366,20 +444,24 @@ class MemoryRepository(BaseRepository):
                     source_quote=d["source_quote"],
                     confidence=d["confidence"],
                     status=d["status"],
-                    structured_scope=self._deserialize_scope(d.get("structured_scope_json")),
-                    structured_constraint=self._deserialize_constraint(d.get("structured_constraint_json")),
+                    structured_scope=self._deserialize_scope(
+                        d.get("structured_scope_json")
+                    ),
+                    structured_constraint=self._deserialize_constraint(
+                        d.get("structured_constraint_json")
+                    ),
                     promoted_to_rule_id=d.get("promoted_to_rule_id"),
                     created_at=d.get("created_at"),
-                    updated_at=d.get("updated_at")
+                    updated_at=d.get("updated_at"),
                 )
         return None
 
     def list_candidates(
         self,
         client_id: str,
-        status: Optional[Union[RuleStatus, str]] = RuleStatus.PENDING_REVIEW,
-        process_name: Optional[str] = None
-    ) -> List[CandidateRule]:
+        status: RuleStatus | str | None = RuleStatus.PENDING_REVIEW,
+        process_name: str | None = None,
+    ) -> list[CandidateRule]:
         with db_session(self.db_path) as conn:
             cursor = conn.cursor()
             query = "SELECT * FROM memory_candidates WHERE client_id = ?"
@@ -411,11 +493,15 @@ class MemoryRepository(BaseRepository):
                         source_quote=d["source_quote"],
                         confidence=d["confidence"],
                         status=d["status"],
-                        structured_scope=self._deserialize_scope(d.get("structured_scope_json")),
-                        structured_constraint=self._deserialize_constraint(d.get("structured_constraint_json")),
+                        structured_scope=self._deserialize_scope(
+                            d.get("structured_scope_json")
+                        ),
+                        structured_constraint=self._deserialize_constraint(
+                            d.get("structured_constraint_json")
+                        ),
                         promoted_to_rule_id=d.get("promoted_to_rule_id"),
                         created_at=d.get("created_at"),
-                        updated_at=d.get("updated_at")
+                        updated_at=d.get("updated_at"),
                     )
                 )
             return results
@@ -424,14 +510,14 @@ class MemoryRepository(BaseRepository):
     def review_candidate(
         self,
         candidate_id: str,
-        decision: Union[DecisionType, str],
+        decision: DecisionType | str,
         reviewer: str,
-        client_id: Optional[str] = None,
-        edited_rule_text: Optional[str] = None,
-        edited_scope: Optional[ActionContext] = None,
-        edited_constraint: Optional[DeterministicConstraint] = None,
-        notes: Optional[str] = None
-    ) -> Optional[CanonicalRule]:
+        client_id: str | None = None,
+        edited_rule_text: str | None = None,
+        edited_scope: ActionContext | None = None,
+        edited_constraint: DeterministicConstraint | None = None,
+        notes: str | None = None,
+    ) -> CanonicalRule | None:
         if isinstance(decision, str):
             decision = DecisionType(decision)
 
@@ -444,16 +530,18 @@ class MemoryRepository(BaseRepository):
             if client_id:
                 row = cursor.execute(
                     "SELECT * FROM memory_candidates WHERE candidate_id = ? AND client_id = ?",
-                    (candidate_id, client_id)
+                    (candidate_id, client_id),
                 ).fetchone()
             else:
                 row = cursor.execute(
                     "SELECT * FROM memory_candidates WHERE candidate_id = ?",
-                    (candidate_id,)
+                    (candidate_id,),
                 ).fetchone()
 
             if not row:
-                raise ValueError(f"Candidate with ID '{candidate_id}' not found for tenant '{client_id or 'any'}'.")
+                raise ValueError(
+                    f"Candidate with ID '{candidate_id}' not found for tenant '{client_id or 'any'}'."
+                )
 
             d = dict(row)
             candidate = CandidateRule(
@@ -468,9 +556,13 @@ class MemoryRepository(BaseRepository):
                 source_quote=d["source_quote"],
                 confidence=d["confidence"],
                 status=d["status"],
-                structured_scope=self._deserialize_scope(d.get("structured_scope_json")),
-                structured_constraint=self._deserialize_constraint(d.get("structured_constraint_json")),
-                promoted_to_rule_id=d.get("promoted_to_rule_id")
+                structured_scope=self._deserialize_scope(
+                    d.get("structured_scope_json")
+                ),
+                structured_constraint=self._deserialize_constraint(
+                    d.get("structured_constraint_json")
+                ),
+                promoted_to_rule_id=d.get("promoted_to_rule_id"),
             )
 
             if candidate.status != RuleStatus.PENDING_REVIEW:
@@ -480,9 +572,15 @@ class MemoryRepository(BaseRepository):
 
             with conn:
                 if decision in (DecisionType.APPROVE, DecisionType.EDIT):
-                    final_text = edited_rule_text if (decision == DecisionType.EDIT and edited_rule_text) else candidate.rule_text
+                    final_text = (
+                        edited_rule_text
+                        if (decision == DecisionType.EDIT and edited_rule_text)
+                        else candidate.rule_text
+                    )
                     final_scope = edited_scope or candidate.structured_scope
-                    final_constraint = edited_constraint or candidate.structured_constraint
+                    final_constraint = (
+                        edited_constraint or candidate.structured_constraint
+                    )
                     rule_id = f"rule_{uuid.uuid4().hex}"
 
                     canonical_rule = CanonicalRule(
@@ -501,7 +599,7 @@ class MemoryRepository(BaseRepository):
                         approved_by=reviewer,
                         approved_at=now,
                         created_at=now,
-                        updated_at=now
+                        updated_at=now,
                     )
 
                     cur = conn.execute(
@@ -510,10 +608,12 @@ class MemoryRepository(BaseRepository):
                         SET status = 'approved', promoted_to_rule_id = ?, updated_at = ?
                         WHERE candidate_id = ? AND status = 'pending_review'
                         """,
-                        (rule_id, now, candidate_id)
+                        (rule_id, now, candidate_id),
                     )
                     if cur.rowcount == 0:
-                        raise ValueError(f"Candidate '{candidate_id}' review conflict: state changed concurrently.")
+                        raise ValueError(
+                            f"Candidate '{candidate_id}' review conflict: state changed concurrently."
+                        )
 
                     scope_json = self._serialize_json(final_scope)
                     constraint_json = self._serialize_json(final_constraint)
@@ -525,13 +625,24 @@ class MemoryRepository(BaseRepository):
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
-                            canonical_rule.rule_id, canonical_rule.client_id, canonical_rule.process_name,
-                            canonical_rule.rule_text, canonical_rule.rule_type.value, canonical_rule.severity.value,
-                            canonical_rule.enforcement_mode.value, canonical_rule.version, canonical_rule.status.value,
-                            canonical_rule.source_candidate_id, canonical_rule.replaced_by_rule_id,
-                            scope_json, constraint_json, canonical_rule.approved_by,
-                            canonical_rule.approved_at, canonical_rule.created_at, canonical_rule.updated_at
-                        )
+                            canonical_rule.rule_id,
+                            canonical_rule.client_id,
+                            canonical_rule.process_name,
+                            canonical_rule.rule_text,
+                            canonical_rule.rule_type.value,
+                            canonical_rule.severity.value,
+                            canonical_rule.enforcement_mode.value,
+                            canonical_rule.version,
+                            canonical_rule.status.value,
+                            canonical_rule.source_candidate_id,
+                            canonical_rule.replaced_by_rule_id,
+                            scope_json,
+                            constraint_json,
+                            canonical_rule.approved_by,
+                            canonical_rule.approved_at,
+                            canonical_rule.created_at,
+                            canonical_rule.updated_at,
+                        ),
                     )
 
                     conn.execute(
@@ -541,10 +652,19 @@ class MemoryRepository(BaseRepository):
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
-                            event_id, candidate.client_id, candidate_id, rule_id,
-                            EventType.CANDIDATE_REVIEW.value, reviewer, decision.value,
-                            edited_rule_text, scope_json, constraint_json, notes, now
-                        )
+                            event_id,
+                            candidate.client_id,
+                            candidate_id,
+                            rule_id,
+                            EventType.CANDIDATE_REVIEW.value,
+                            reviewer,
+                            decision.value,
+                            edited_rule_text,
+                            scope_json,
+                            constraint_json,
+                            notes,
+                            now,
+                        ),
                     )
 
                 elif decision == DecisionType.REJECT:
@@ -554,10 +674,12 @@ class MemoryRepository(BaseRepository):
                         SET status = 'rejected', updated_at = ?
                         WHERE candidate_id = ? AND status = 'pending_review'
                         """,
-                        (now, candidate_id)
+                        (now, candidate_id),
                     )
                     if cur.rowcount == 0:
-                        raise ValueError(f"Candidate '{candidate_id}' review conflict: state changed concurrently.")
+                        raise ValueError(
+                            f"Candidate '{candidate_id}' review conflict: state changed concurrently."
+                        )
 
                     conn.execute(
                         """
@@ -566,10 +688,17 @@ class MemoryRepository(BaseRepository):
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
-                            event_id, candidate.client_id, candidate_id, None,
-                            EventType.CANDIDATE_REVIEW.value, reviewer, decision.value,
-                            None, notes, now
-                        )
+                            event_id,
+                            candidate.client_id,
+                            candidate_id,
+                            None,
+                            EventType.CANDIDATE_REVIEW.value,
+                            reviewer,
+                            decision.value,
+                            None,
+                            notes,
+                            now,
+                        ),
                     )
 
         return canonical_rule
@@ -579,8 +708,8 @@ class MemoryRepository(BaseRepository):
         old_rule_id: str,
         new_rule_text: str,
         reviewer: str,
-        client_id: Optional[str] = None,
-        notes: Optional[str] = None
+        client_id: str | None = None,
+        notes: str | None = None,
     ) -> CanonicalRule:
         now = self._now()
         new_rule_id = f"rule_{uuid.uuid4().hex}"
@@ -591,16 +720,17 @@ class MemoryRepository(BaseRepository):
             if client_id:
                 old_row = cursor.execute(
                     "SELECT * FROM canonical_rules WHERE rule_id = ? AND client_id = ?",
-                    (old_rule_id, client_id)
+                    (old_rule_id, client_id),
                 ).fetchone()
             else:
                 old_row = cursor.execute(
-                    "SELECT * FROM canonical_rules WHERE rule_id = ?",
-                    (old_rule_id,)
+                    "SELECT * FROM canonical_rules WHERE rule_id = ?", (old_rule_id,)
                 ).fetchone()
 
             if not old_row:
-                raise ValueError(f"Canonical Rule with ID '{old_rule_id}' not found for tenant '{client_id or 'any'}'.")
+                raise ValueError(
+                    f"Canonical Rule with ID '{old_rule_id}' not found for tenant '{client_id or 'any'}'."
+                )
 
             d = dict(old_row)
             old_rule = CanonicalRule(
@@ -613,9 +743,13 @@ class MemoryRepository(BaseRepository):
                 enforcement_mode=d["enforcement_mode"],
                 version=d["version"],
                 status=d["status"],
-                structured_scope=self._deserialize_scope(d.get("structured_scope_json")),
-                structured_constraint=self._deserialize_constraint(d.get("structured_constraint_json")),
-                approved_by=d["approved_by"]
+                structured_scope=self._deserialize_scope(
+                    d.get("structured_scope_json")
+                ),
+                structured_constraint=self._deserialize_constraint(
+                    d.get("structured_constraint_json")
+                ),
+                approved_by=d["approved_by"],
             )
 
             if old_rule.status != RuleStatus.APPROVED:
@@ -639,7 +773,7 @@ class MemoryRepository(BaseRepository):
                 approved_by=reviewer,
                 approved_at=now,
                 created_at=now,
-                updated_at=now
+                updated_at=now,
             )
 
             with conn:
@@ -649,10 +783,12 @@ class MemoryRepository(BaseRepository):
                     SET status = 'superseded', replaced_by_rule_id = ?, updated_at = ?
                     WHERE rule_id = ? AND status = 'approved'
                     """,
-                    (new_rule_id, now, old_rule_id)
+                    (new_rule_id, now, old_rule_id),
                 )
                 if cur.rowcount == 0:
-                    raise ValueError(f"Rule '{old_rule_id}' supersede conflict: state changed concurrently.")
+                    raise ValueError(
+                        f"Rule '{old_rule_id}' supersede conflict: state changed concurrently."
+                    )
 
                 scope_json = self._serialize_json(new_rule.structured_scope)
                 constraint_json = self._serialize_json(new_rule.structured_constraint)
@@ -664,13 +800,24 @@ class MemoryRepository(BaseRepository):
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        new_rule.rule_id, new_rule.client_id, new_rule.process_name,
-                        new_rule.rule_text, new_rule.rule_type.value, new_rule.severity.value,
-                        new_rule.enforcement_mode.value, new_rule.version, new_rule.status.value,
-                        new_rule.source_candidate_id, new_rule.replaced_by_rule_id,
-                        scope_json, constraint_json, new_rule.approved_by,
-                        new_rule.approved_at, new_rule.created_at, new_rule.updated_at
-                    )
+                        new_rule.rule_id,
+                        new_rule.client_id,
+                        new_rule.process_name,
+                        new_rule.rule_text,
+                        new_rule.rule_type.value,
+                        new_rule.severity.value,
+                        new_rule.enforcement_mode.value,
+                        new_rule.version,
+                        new_rule.status.value,
+                        new_rule.source_candidate_id,
+                        new_rule.replaced_by_rule_id,
+                        scope_json,
+                        constraint_json,
+                        new_rule.approved_by,
+                        new_rule.approved_at,
+                        new_rule.created_at,
+                        new_rule.updated_at,
+                    ),
                 )
 
                 conn.execute(
@@ -680,10 +827,17 @@ class MemoryRepository(BaseRepository):
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        event_id, old_rule.client_id, old_rule.source_candidate_id, new_rule_id,
-                        EventType.RULE_SUPERSEDED.value, reviewer, DecisionType.SUPERSEDE.value,
-                        new_rule_text, notes, now
-                    )
+                        event_id,
+                        old_rule.client_id,
+                        old_rule.source_candidate_id,
+                        new_rule_id,
+                        EventType.RULE_SUPERSEDED.value,
+                        reviewer,
+                        DecisionType.SUPERSEDE.value,
+                        new_rule_text,
+                        notes,
+                        now,
+                    ),
                 )
 
         return new_rule
@@ -693,49 +847,70 @@ class MemoryRepository(BaseRepository):
         scope_json = self._serialize_json(rule.structured_scope)
         constraint_json = self._serialize_json(rule.structured_constraint)
 
-        with db_session(self.db_path) as conn:
-            with conn:
-                conn.execute(
-                    """
-                    INSERT INTO canonical_rules
-                    (rule_id, client_id, process_name, rule_text, rule_type, severity, enforcement_mode, version, status, source_candidate_id, replaced_by_rule_id, structured_scope_json, structured_constraint_json, approved_by, approved_at, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(rule_id) DO UPDATE SET
-                        process_name=excluded.process_name,
-                        rule_text=excluded.rule_text,
-                        rule_type=excluded.rule_type,
-                        severity=excluded.severity,
-                        enforcement_mode=excluded.enforcement_mode,
-                        version=excluded.version,
-                        status=excluded.status,
-                        source_candidate_id=excluded.source_candidate_id,
-                        replaced_by_rule_id=excluded.replaced_by_rule_id,
-                        structured_scope_json=excluded.structured_scope_json,
-                        structured_constraint_json=excluded.structured_constraint_json,
-                        approved_by=excluded.approved_by,
-                        updated_at=?
-                    """,
-                    (
-                        rule.rule_id, rule.client_id, rule.process_name or "general",
-                        rule.rule_text, rule.rule_type.value if hasattr(rule.rule_type, "value") else rule.rule_type,
-                        rule.severity.value if hasattr(rule.severity, "value") else rule.severity,
-                        rule.enforcement_mode.value if hasattr(rule.enforcement_mode, "value") else rule.enforcement_mode,
-                        rule.version, rule.status.value if hasattr(rule.status, "value") else rule.status,
-                        rule.source_candidate_id, rule.replaced_by_rule_id,
-                        scope_json, constraint_json, rule.approved_by,
-                        rule.approved_at or now, rule.created_at or now, rule.updated_at or now,
-                        now
-                    )
-                )
+        with db_session(self.db_path) as conn, conn:
+            conn.execute(
+                """
+                INSERT INTO canonical_rules
+                (rule_id, client_id, process_name, rule_text, rule_type, severity, enforcement_mode, version, status, source_candidate_id, replaced_by_rule_id, structured_scope_json, structured_constraint_json, approved_by, approved_at, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(rule_id) DO UPDATE SET
+                    process_name=excluded.process_name,
+                    rule_text=excluded.rule_text,
+                    rule_type=excluded.rule_type,
+                    severity=excluded.severity,
+                    enforcement_mode=excluded.enforcement_mode,
+                    version=excluded.version,
+                    status=excluded.status,
+                    source_candidate_id=excluded.source_candidate_id,
+                    replaced_by_rule_id=excluded.replaced_by_rule_id,
+                    structured_scope_json=excluded.structured_scope_json,
+                    structured_constraint_json=excluded.structured_constraint_json,
+                    approved_by=excluded.approved_by,
+                    updated_at=?
+                """,
+                (
+                    rule.rule_id,
+                    rule.client_id,
+                    rule.process_name or "general",
+                    rule.rule_text,
+                    rule.rule_type.value
+                    if hasattr(rule.rule_type, "value")
+                    else rule.rule_type,
+                    rule.severity.value
+                    if hasattr(rule.severity, "value")
+                    else rule.severity,
+                    rule.enforcement_mode.value
+                    if hasattr(rule.enforcement_mode, "value")
+                    else rule.enforcement_mode,
+                    rule.version,
+                    rule.status.value if hasattr(rule.status, "value") else rule.status,
+                    rule.source_candidate_id,
+                    rule.replaced_by_rule_id,
+                    scope_json,
+                    constraint_json,
+                    rule.approved_by,
+                    rule.approved_at or now,
+                    rule.created_at or now,
+                    rule.updated_at or now,
+                    now,
+                ),
+            )
         return rule
 
-    def get_rule(self, rule_id: str, client_id: Optional[str] = None) -> Optional[CanonicalRule]:
+    def get_rule(
+        self, rule_id: str, client_id: str | None = None
+    ) -> CanonicalRule | None:
         with db_session(self.db_path) as conn:
             cursor = conn.cursor()
             if client_id:
-                row = cursor.execute("SELECT * FROM canonical_rules WHERE rule_id = ? AND client_id = ?", (rule_id, client_id)).fetchone()
+                row = cursor.execute(
+                    "SELECT * FROM canonical_rules WHERE rule_id = ? AND client_id = ?",
+                    (rule_id, client_id),
+                ).fetchone()
             else:
-                row = cursor.execute("SELECT * FROM canonical_rules WHERE rule_id = ?", (rule_id,)).fetchone()
+                row = cursor.execute(
+                    "SELECT * FROM canonical_rules WHERE rule_id = ?", (rule_id,)
+                ).fetchone()
             if row:
                 d = dict(row)
                 return CanonicalRule(
@@ -750,23 +925,27 @@ class MemoryRepository(BaseRepository):
                     status=d["status"],
                     source_candidate_id=d.get("source_candidate_id"),
                     replaced_by_rule_id=d.get("replaced_by_rule_id"),
-                    structured_scope=self._deserialize_scope(d.get("structured_scope_json")),
-                    structured_constraint=self._deserialize_constraint(d.get("structured_constraint_json")),
+                    structured_scope=self._deserialize_scope(
+                        d.get("structured_scope_json")
+                    ),
+                    structured_constraint=self._deserialize_constraint(
+                        d.get("structured_constraint_json")
+                    ),
                     approved_by=d["approved_by"],
                     approved_at=d.get("approved_at"),
                     created_at=d.get("created_at"),
-                    updated_at=d.get("updated_at")
+                    updated_at=d.get("updated_at"),
                 )
         return None
 
     def get_active_rules(
         self,
         client_id: str,
-        process_name: Optional[str] = None,
-        system: Optional[str] = None,
-        resource: Optional[str] = None,
-        operation: Optional[str] = None
-    ) -> List[CanonicalRule]:
+        process_name: str | None = None,
+        system: str | None = None,
+        resource: str | None = None,
+        operation: str | None = None,
+    ) -> list[CanonicalRule]:
         with db_session(self.db_path) as conn:
             cursor = conn.cursor()
             query = "SELECT * FROM canonical_rules WHERE client_id = ? AND status = 'approved'"
@@ -793,12 +972,16 @@ class MemoryRepository(BaseRepository):
                     status=d["status"],
                     source_candidate_id=d.get("source_candidate_id"),
                     replaced_by_rule_id=d.get("replaced_by_rule_id"),
-                    structured_scope=self._deserialize_scope(d.get("structured_scope_json")),
-                    structured_constraint=self._deserialize_constraint(d.get("structured_constraint_json")),
+                    structured_scope=self._deserialize_scope(
+                        d.get("structured_scope_json")
+                    ),
+                    structured_constraint=self._deserialize_constraint(
+                        d.get("structured_constraint_json")
+                    ),
                     approved_by=d["approved_by"],
                     approved_at=d.get("approved_at"),
                     created_at=d.get("created_at"),
-                    updated_at=d.get("updated_at")
+                    updated_at=d.get("updated_at"),
                 )
                 results.append(rule)
             return results
@@ -811,8 +994,65 @@ class MemoryRepository(BaseRepository):
         payload_json = self._serialize_json(run.result_payload)
         conn_json = self._serialize_json(run.connection_snapshot)
 
-        with db_session(self.db_path) as conn:
-            with conn:
+        with db_session(self.db_path) as conn, conn:
+            conn.execute(
+                """
+                INSERT INTO execution_runs
+                (run_id, company_id, user_id, correlation_id, action_scope_json, adapter_kind, status,
+                 redacted_input_hash, hash_algorithm_version, connection_snapshot_json, execution_token,
+                 applied_rules_snapshot_json, odoo_task_id, odoo_task_url, result_payload_json,
+                 error_code, error_detail, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(company_id, correlation_id) DO UPDATE SET
+                    status=excluded.status,
+                    redacted_input_hash=excluded.redacted_input_hash,
+                    hash_algorithm_version=excluded.hash_algorithm_version,
+                    connection_snapshot_json=excluded.connection_snapshot_json,
+                    execution_token=excluded.execution_token,
+                    odoo_task_id=excluded.odoo_task_id,
+                    odoo_task_url=excluded.odoo_task_url,
+                    result_payload_json=excluded.result_payload_json,
+                    applied_rules_snapshot_json=excluded.applied_rules_snapshot_json,
+                    error_code=excluded.error_code,
+                    error_detail=excluded.error_detail
+                """,
+                (
+                    run.run_id,
+                    run.company_id,
+                    run.user_id,
+                    run.correlation_id,
+                    scope_json,
+                    run.adapter_kind,
+                    run.status.value
+                    if isinstance(run.status, RunStatus)
+                    else run.status,
+                    run.redacted_input_hash,
+                    run.hash_algorithm_version,
+                    conn_json,
+                    run.execution_token,
+                    rules_json,
+                    run.odoo_task_id,
+                    run.odoo_task_url,
+                    payload_json,
+                    run.error_code,
+                    run.error_detail,
+                    run.created_at or now,
+                ),
+            )
+        return run
+
+    def claim_execution_run(
+        self, run: ExecutionRunRecord, event: ExecutionEventRecord
+    ) -> tuple[bool, ExecutionRunRecord]:
+        now = self._now()
+        scope_json = self._serialize_json(run.action_scope)
+        rules_json = self._serialize_json(run.applied_rules_snapshot)
+        payload_json = self._serialize_json(run.result_payload)
+        conn_json = self._serialize_json(run.connection_snapshot)
+        details_json = self._serialize_json(event.details)
+
+        with db_session(self.db_path) as conn, conn:
+            try:
                 conn.execute(
                     """
                     INSERT INTO execution_runs
@@ -821,182 +1061,207 @@ class MemoryRepository(BaseRepository):
                      applied_rules_snapshot_json, odoo_task_id, odoo_task_url, result_payload_json,
                      error_code, error_detail, created_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(company_id, correlation_id) DO UPDATE SET
-                        status=excluded.status,
-                        redacted_input_hash=excluded.redacted_input_hash,
-                        hash_algorithm_version=excluded.hash_algorithm_version,
-                        connection_snapshot_json=excluded.connection_snapshot_json,
-                        execution_token=excluded.execution_token,
-                        odoo_task_id=excluded.odoo_task_id,
-                        odoo_task_url=excluded.odoo_task_url,
-                        result_payload_json=excluded.result_payload_json,
-                        applied_rules_snapshot_json=excluded.applied_rules_snapshot_json,
-                        error_code=excluded.error_code,
-                        error_detail=excluded.error_detail
                     """,
                     (
-                        run.run_id, run.company_id, run.user_id, run.correlation_id,
-                        scope_json, run.adapter_kind, run.status.value if isinstance(run.status, RunStatus) else run.status,
-                        run.redacted_input_hash, run.hash_algorithm_version, conn_json, run.execution_token,
-                        rules_json, run.odoo_task_id, run.odoo_task_url,
-                        payload_json, run.error_code, run.error_detail, run.created_at or now
-                    )
+                        run.run_id,
+                        run.company_id,
+                        run.user_id,
+                        run.correlation_id,
+                        scope_json,
+                        run.adapter_kind,
+                        RunStatus.RUN_STARTED.value,
+                        run.redacted_input_hash,
+                        run.hash_algorithm_version,
+                        conn_json,
+                        run.execution_token,
+                        rules_json,
+                        run.odoo_task_id,
+                        run.odoo_task_url,
+                        payload_json,
+                        run.error_code,
+                        run.error_detail,
+                        run.created_at or now,
+                    ),
                 )
-        return run
+                conn.execute(
+                    """
+                    INSERT INTO execution_events (event_id, run_id, event_type, details_json, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        event.event_id,
+                        run.run_id,
+                        event.event_type.value,
+                        details_json,
+                        event.created_at or now,
+                    ),
+                )
+                return True, run
+            except sqlite3.IntegrityError:
+                existing_row = conn.execute(
+                    "SELECT * FROM execution_runs WHERE company_id = ? AND correlation_id = ?",
+                    (run.company_id, run.correlation_id),
+                ).fetchone()
+                if not existing_row:
+                    raise
+                existing_run = self._parse_run_row(dict(existing_row))
 
-    def claim_execution_run(self, run: ExecutionRunRecord, event: ExecutionEventRecord) -> Tuple[bool, ExecutionRunRecord]:
-        now = self._now()
-        scope_json = self._serialize_json(run.action_scope)
-        rules_json = self._serialize_json(run.applied_rules_snapshot)
-        payload_json = self._serialize_json(run.result_payload)
-        conn_json = self._serialize_json(run.connection_snapshot)
-        details_json = self._serialize_json(event.details)
-
-        with db_session(self.db_path) as conn:
-            with conn:
-                try:
-                    conn.execute(
-                        """
-                        INSERT INTO execution_runs
-                        (run_id, company_id, user_id, correlation_id, action_scope_json, adapter_kind, status,
-                         redacted_input_hash, hash_algorithm_version, connection_snapshot_json, execution_token,
-                         applied_rules_snapshot_json, odoo_task_id, odoo_task_url, result_payload_json,
-                         error_code, error_detail, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            run.run_id, run.company_id, run.user_id, run.correlation_id,
-                            scope_json, run.adapter_kind, RunStatus.RUN_STARTED.value,
-                            run.redacted_input_hash, run.hash_algorithm_version, conn_json, run.execution_token,
-                            rules_json, run.odoo_task_id, run.odoo_task_url, payload_json,
-                            run.error_code, run.error_detail, run.created_at or now
-                        )
-                    )
-                    conn.execute(
-                        """
-                        INSERT INTO execution_events (event_id, run_id, event_type, details_json, created_at)
-                        VALUES (?, ?, ?, ?, ?)
-                        """,
-                        (event.event_id, run.run_id, event.event_type.value, details_json, event.created_at or now)
-                    )
-                    return True, run
-                except sqlite3.IntegrityError:
-                    existing_row = conn.execute(
-                        "SELECT * FROM execution_runs WHERE company_id = ? AND correlation_id = ?",
-                        (run.company_id, run.correlation_id)
-                    ).fetchone()
-                    if not existing_row:
-                        raise
-                    existing_run = self._parse_run_row(dict(existing_row))
-
-                    if existing_run.status == RunStatus.NEEDS_CLARIFICATION:
-                        cur = conn.execute(
-                            """
-                            UPDATE execution_runs
-                            SET status = 'run_started',
-                                execution_token = ?,
-                                redacted_input_hash = ?,
-                                hash_algorithm_version = ?,
-                                connection_snapshot_json = ?,
-                                action_scope_json = ?,
-                                adapter_kind = ?,
-                                applied_rules_snapshot_json = ?,
-                                result_payload_json = ?,
-                                error_code = NULL,
-                                error_detail = NULL,
-                                odoo_task_id = NULL,
-                                odoo_task_url = NULL
-                            WHERE company_id = ? AND correlation_id = ? AND status = 'needs_clarification'
-                            """,
-                            (
-                                run.execution_token, run.redacted_input_hash, run.hash_algorithm_version,
-                                conn_json, scope_json, run.adapter_kind, rules_json, payload_json,
-                                run.company_id, run.correlation_id
-                            )
-                        )
-                        if cur.rowcount == 1:
-                            conn.execute(
-                                """
-                                INSERT INTO execution_events (event_id, run_id, event_type, details_json, created_at)
-                                VALUES (?, ?, ?, ?, ?)
-                                """,
-                                (event.event_id, existing_run.run_id, event.event_type.value, details_json, event.created_at or now)
-                            )
-                            updated_run = self.get_execution_run_by_correlation(run.company_id, run.correlation_id)
-                            return True, updated_run or run
-
-                    return False, existing_run
-
-    def record_validation_blocked(self, run: ExecutionRunRecord, event: ExecutionEventRecord) -> ExecutionRunRecord:
-        now = self._now()
-        scope_json = self._serialize_json(run.action_scope)
-        rules_json = self._serialize_json(run.applied_rules_snapshot)
-        payload_json = self._serialize_json(run.result_payload)
-        conn_json = self._serialize_json(run.connection_snapshot)
-        details_json = self._serialize_json(event.details)
-
-        with db_session(self.db_path) as conn:
-            with conn:
-                try:
-                    conn.execute(
-                        """
-                        INSERT INTO execution_runs
-                        (run_id, company_id, user_id, correlation_id, action_scope_json, adapter_kind, status,
-                         redacted_input_hash, hash_algorithm_version, connection_snapshot_json, execution_token,
-                         applied_rules_snapshot_json, odoo_task_id, odoo_task_url, result_payload_json,
-                         error_code, error_detail, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            run.run_id, run.company_id, run.user_id, run.correlation_id,
-                            scope_json, run.adapter_kind, RunStatus.NEEDS_CLARIFICATION.value,
-                            run.redacted_input_hash, run.hash_algorithm_version, conn_json, run.execution_token,
-                            rules_json, run.odoo_task_id, run.odoo_task_url, payload_json,
-                            run.error_code, run.error_detail, run.created_at or now
-                        )
-                    )
-                    conn.execute(
-                        """
-                        INSERT INTO execution_events (event_id, run_id, event_type, details_json, created_at)
-                        VALUES (?, ?, ?, ?, ?)
-                        """,
-                        (event.event_id, run.run_id, event.event_type.value, details_json, event.created_at or now)
-                    )
-                    return run
-                except sqlite3.IntegrityError:
+                if existing_run.status == RunStatus.NEEDS_CLARIFICATION:
                     cur = conn.execute(
                         """
                         UPDATE execution_runs
-                        SET redacted_input_hash = ?,
+                        SET status = 'run_started',
+                            execution_token = ?,
+                            redacted_input_hash = ?,
                             hash_algorithm_version = ?,
                             connection_snapshot_json = ?,
                             action_scope_json = ?,
+                            adapter_kind = ?,
                             applied_rules_snapshot_json = ?,
                             result_payload_json = ?,
-                            error_code = ?,
-                            error_detail = ?
+                            error_code = NULL,
+                            error_detail = NULL,
+                            odoo_task_id = NULL,
+                            odoo_task_url = NULL
                         WHERE company_id = ? AND correlation_id = ? AND status = 'needs_clarification'
                         """,
                         (
-                            run.redacted_input_hash, run.hash_algorithm_version, conn_json,
-                            scope_json, rules_json, payload_json, run.error_code, run.error_detail,
-                            run.company_id, run.correlation_id
-                        )
+                            run.execution_token,
+                            run.redacted_input_hash,
+                            run.hash_algorithm_version,
+                            conn_json,
+                            scope_json,
+                            run.adapter_kind,
+                            rules_json,
+                            payload_json,
+                            run.company_id,
+                            run.correlation_id,
+                        ),
                     )
-                    existing_row = conn.execute(
-                        "SELECT * FROM execution_runs WHERE company_id = ? AND correlation_id = ?",
-                        (run.company_id, run.correlation_id)
-                    ).fetchone()
-                    existing_run = self._parse_run_row(dict(existing_row))
-                    if cur.rowcount > 0:
+                    if cur.rowcount == 1:
                         conn.execute(
                             """
                             INSERT INTO execution_events (event_id, run_id, event_type, details_json, created_at)
                             VALUES (?, ?, ?, ?, ?)
                             """,
-                            (event.event_id, existing_run.run_id, event.event_type.value, details_json, event.created_at or now)
+                            (
+                                event.event_id,
+                                existing_run.run_id,
+                                event.event_type.value,
+                                details_json,
+                                event.created_at or now,
+                            ),
                         )
-                    return existing_run
+                        updated_run = self.get_execution_run_by_correlation(
+                            run.company_id, run.correlation_id
+                        )
+                        return True, updated_run or run
+
+                return False, existing_run
+
+    def record_validation_blocked(
+        self, run: ExecutionRunRecord, event: ExecutionEventRecord
+    ) -> ExecutionRunRecord:
+        now = self._now()
+        scope_json = self._serialize_json(run.action_scope)
+        rules_json = self._serialize_json(run.applied_rules_snapshot)
+        payload_json = self._serialize_json(run.result_payload)
+        conn_json = self._serialize_json(run.connection_snapshot)
+        details_json = self._serialize_json(event.details)
+
+        with db_session(self.db_path) as conn, conn:
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO execution_runs
+                    (run_id, company_id, user_id, correlation_id, action_scope_json, adapter_kind, status,
+                     redacted_input_hash, hash_algorithm_version, connection_snapshot_json, execution_token,
+                     applied_rules_snapshot_json, odoo_task_id, odoo_task_url, result_payload_json,
+                     error_code, error_detail, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        run.run_id,
+                        run.company_id,
+                        run.user_id,
+                        run.correlation_id,
+                        scope_json,
+                        run.adapter_kind,
+                        RunStatus.NEEDS_CLARIFICATION.value,
+                        run.redacted_input_hash,
+                        run.hash_algorithm_version,
+                        conn_json,
+                        run.execution_token,
+                        rules_json,
+                        run.odoo_task_id,
+                        run.odoo_task_url,
+                        payload_json,
+                        run.error_code,
+                        run.error_detail,
+                        run.created_at or now,
+                    ),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO execution_events (event_id, run_id, event_type, details_json, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        event.event_id,
+                        run.run_id,
+                        event.event_type.value,
+                        details_json,
+                        event.created_at or now,
+                    ),
+                )
+                return run
+            except sqlite3.IntegrityError:
+                cur = conn.execute(
+                    """
+                    UPDATE execution_runs
+                    SET redacted_input_hash = ?,
+                        hash_algorithm_version = ?,
+                        connection_snapshot_json = ?,
+                        action_scope_json = ?,
+                        applied_rules_snapshot_json = ?,
+                        result_payload_json = ?,
+                        error_code = ?,
+                        error_detail = ?
+                    WHERE company_id = ? AND correlation_id = ? AND status = 'needs_clarification'
+                    """,
+                    (
+                        run.redacted_input_hash,
+                        run.hash_algorithm_version,
+                        conn_json,
+                        scope_json,
+                        rules_json,
+                        payload_json,
+                        run.error_code,
+                        run.error_detail,
+                        run.company_id,
+                        run.correlation_id,
+                    ),
+                )
+                existing_row = conn.execute(
+                    "SELECT * FROM execution_runs WHERE company_id = ? AND correlation_id = ?",
+                    (run.company_id, run.correlation_id),
+                ).fetchone()
+                existing_run = self._parse_run_row(dict(existing_row))
+                if cur.rowcount > 0:
+                    conn.execute(
+                        """
+                        INSERT INTO execution_events (event_id, run_id, event_type, details_json, created_at)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (
+                            event.event_id,
+                            existing_run.run_id,
+                            event.event_type.value,
+                            details_json,
+                            event.created_at or now,
+                        ),
+                    )
+                return existing_run
 
     def transition_execution_run(
         self,
@@ -1005,108 +1270,131 @@ class MemoryRepository(BaseRepository):
         execution_token: str,
         new_status: RunStatus,
         event: ExecutionEventRecord,
-        odoo_task_id: Optional[int] = None,
-        odoo_task_url: Optional[str] = None,
-        result_payload: Optional[Dict[str, Any]] = None,
-        error_code: Optional[str] = None,
-        error_detail: Optional[str] = None
+        odoo_task_id: int | None = None,
+        odoo_task_url: str | None = None,
+        result_payload: dict[str, Any] | None = None,
+        error_code: str | None = None,
+        error_detail: str | None = None,
     ) -> bool:
         now = self._now()
-        payload_json = self._serialize_json(result_payload) if result_payload is not None else None
+        payload_json = (
+            self._serialize_json(result_payload) if result_payload is not None else None
+        )
         details_json = self._serialize_json(event.details)
 
-        with db_session(self.db_path) as conn:
-            with conn:
-                query = """
+        with db_session(self.db_path) as conn, conn:
+            query = """
+                UPDATE execution_runs
+                SET status = ?,
+                    error_code = ?,
+                    error_detail = ?
+            """
+            params: list[Any] = [
+                new_status.value if isinstance(new_status, RunStatus) else new_status,
+                error_code,
+                error_detail,
+            ]
+            if odoo_task_id is not None:
+                query += ", odoo_task_id = ?"
+                params.append(odoo_task_id)
+            if odoo_task_url is not None:
+                query += ", odoo_task_url = ?"
+                params.append(odoo_task_url)
+            if payload_json is not None:
+                query += ", result_payload_json = ?"
+                params.append(payload_json)
+
+            query += " WHERE company_id = ? AND run_id = ? AND execution_token = ?"
+            params.extend([company_id, run_id, execution_token])
+
+            cur = conn.execute(query, params)
+            if cur.rowcount == 1:
+                conn.execute(
+                    """
+                    INSERT INTO execution_events (event_id, run_id, event_type, details_json, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        event.event_id,
+                        run_id,
+                        event.event_type.value,
+                        details_json,
+                        event.created_at or now,
+                    ),
+                )
+                return True
+            return False
+
+    def reconcile_abandoned_runs(self) -> int:
+        now = self._now()
+        with db_session(self.db_path) as conn, conn:
+            cursor = conn.cursor()
+            abandoned = cursor.execute(
+                "SELECT run_id, company_id FROM execution_runs WHERE status = 'run_started'"
+            ).fetchall()
+            count = 0
+            for row in abandoned:
+                run_id = row["run_id"]
+                cursor.execute(
+                    """
                     UPDATE execution_runs
-                    SET status = ?,
-                        error_code = ?,
-                        error_detail = ?
-                """
-                params: List[Any] = [
-                    new_status.value if isinstance(new_status, RunStatus) else new_status,
-                    error_code,
-                    error_detail
-                ]
-                if odoo_task_id is not None:
-                    query += ", odoo_task_id = ?"
-                    params.append(odoo_task_id)
-                if odoo_task_url is not None:
-                    query += ", odoo_task_url = ?"
-                    params.append(odoo_task_url)
-                if payload_json is not None:
-                    query += ", result_payload_json = ?"
-                    params.append(payload_json)
-
-                query += " WHERE company_id = ? AND run_id = ? AND execution_token = ?"
-                params.extend([company_id, run_id, execution_token])
-
-                cur = conn.execute(query, params)
-                if cur.rowcount == 1:
-                    conn.execute(
+                    SET status = 'reconciliation_required',
+                        error_code = 'abandoned_run',
+                        error_detail = 'Run was left in run_started state and reconciled on startup'
+                    WHERE run_id = ? AND status = 'run_started'
+                    """,
+                    (run_id,),
+                )
+                if cursor.rowcount > 0:
+                    count += 1
+                    event_id = f"evt_{uuid.uuid4().hex[:12]}"
+                    details_json = json.dumps(
+                        {
+                            "reason": "startup_reconciliation",
+                            "message": "Run was left in run_started state and reconciled on startup",
+                        }
+                    )
+                    cursor.execute(
                         """
                         INSERT INTO execution_events (event_id, run_id, event_type, details_json, created_at)
                         VALUES (?, ?, ?, ?, ?)
                         """,
-                        (event.event_id, run_id, event.event_type.value, details_json, event.created_at or now)
+                        (
+                            event_id,
+                            run_id,
+                            ExecutionEventType.RECONCILIATION_REQUIRED.value,
+                            details_json,
+                            now,
+                        ),
                     )
-                    return True
-                return False
+            return count
 
-    def reconcile_abandoned_runs(self) -> int:
-        now = self._now()
-        with db_session(self.db_path) as conn:
-            with conn:
-                cursor = conn.cursor()
-                abandoned = cursor.execute(
-                    "SELECT run_id, company_id FROM execution_runs WHERE status = 'run_started'"
-                ).fetchall()
-                count = 0
-                for row in abandoned:
-                    run_id = row["run_id"]
-                    cursor.execute(
-                        """
-                        UPDATE execution_runs
-                        SET status = 'reconciliation_required',
-                            error_code = 'abandoned_run',
-                            error_detail = 'Run was left in run_started state and reconciled on startup'
-                        WHERE run_id = ? AND status = 'run_started'
-                        """,
-                        (run_id,)
-                    )
-                    if cursor.rowcount > 0:
-                        count += 1
-                        event_id = f"evt_{uuid.uuid4().hex[:12]}"
-                        details_json = json.dumps({
-                            "reason": "startup_reconciliation",
-                            "message": "Run was left in run_started state and reconciled on startup"
-                        })
-                        cursor.execute(
-                            """
-                            INSERT INTO execution_events (event_id, run_id, event_type, details_json, created_at)
-                            VALUES (?, ?, ?, ?, ?)
-                            """,
-                            (event_id, run_id, ExecutionEventType.RECONCILIATION_REQUIRED.value, details_json, now)
-                        )
-                return count
-
-    def get_execution_run(self, run_id: str, company_id: Optional[str] = None) -> Optional[ExecutionRunRecord]:
+    def get_execution_run(
+        self, run_id: str, company_id: str | None = None
+    ) -> ExecutionRunRecord | None:
         with db_session(self.db_path) as conn:
             cursor = conn.cursor()
             if company_id:
-                row = cursor.execute("SELECT * FROM execution_runs WHERE run_id = ? AND company_id = ?", (run_id, company_id)).fetchone()
+                row = cursor.execute(
+                    "SELECT * FROM execution_runs WHERE run_id = ? AND company_id = ?",
+                    (run_id, company_id),
+                ).fetchone()
             else:
-                row = cursor.execute("SELECT * FROM execution_runs WHERE run_id = ?", (run_id,)).fetchone()
+                row = cursor.execute(
+                    "SELECT * FROM execution_runs WHERE run_id = ?", (run_id,)
+                ).fetchone()
             if row:
                 return self._parse_run_row(dict(row))
         return None
 
-    def get_execution_run_by_correlation(self, company_id: str, correlation_id: str) -> Optional[ExecutionRunRecord]:
+    def get_execution_run_by_correlation(
+        self, company_id: str, correlation_id: str
+    ) -> ExecutionRunRecord | None:
         with db_session(self.db_path) as conn:
             cursor = conn.cursor()
             row = cursor.execute(
                 "SELECT * FROM execution_runs WHERE company_id = ? AND correlation_id = ?",
-                (company_id, correlation_id)
+                (company_id, correlation_id),
             ).fetchone()
             if row:
                 return self._parse_run_row(dict(row))
@@ -1116,37 +1404,49 @@ class MemoryRepository(BaseRepository):
         payload_json = self._serialize_json(run.result_payload)
         rules_json = self._serialize_json(run.applied_rules_snapshot)
 
-        with db_session(self.db_path) as conn:
-            with conn:
-                conn.execute(
-                    """
-                    UPDATE execution_runs
-                    SET status = ?, odoo_task_id = ?, odoo_task_url = ?, result_payload_json = ?, applied_rules_snapshot_json = ?, error_detail = ?
-                    WHERE run_id = ?
-                    """,
-                    (
-                        run.status.value if isinstance(run.status, RunStatus) else run.status,
-                        run.odoo_task_id, run.odoo_task_url, payload_json, rules_json,
-                        run.error_detail, run.run_id
-                    )
-                )
+        with db_session(self.db_path) as conn, conn:
+            conn.execute(
+                """
+                UPDATE execution_runs
+                SET status = ?, odoo_task_id = ?, odoo_task_url = ?, result_payload_json = ?, applied_rules_snapshot_json = ?, error_detail = ?
+                WHERE run_id = ?
+                """,
+                (
+                    run.status.value
+                    if isinstance(run.status, RunStatus)
+                    else run.status,
+                    run.odoo_task_id,
+                    run.odoo_task_url,
+                    payload_json,
+                    rules_json,
+                    run.error_detail,
+                    run.run_id,
+                ),
+            )
         return run
 
     def add_execution_event(self, event: ExecutionEventRecord) -> ExecutionEventRecord:
         now = self._now()
         details_json = self._serialize_json(event.details)
-        with db_session(self.db_path) as conn:
-            with conn:
-                conn.execute(
-                    """
-                    INSERT INTO execution_events (event_id, run_id, event_type, details_json, created_at)
-                    VALUES (?, ?, ?, ?, ?)
-                    """,
-                    (event.event_id, event.run_id, event.event_type.value, details_json, event.created_at or now)
-                )
+        with db_session(self.db_path) as conn, conn:
+            conn.execute(
+                """
+                INSERT INTO execution_events (event_id, run_id, event_type, details_json, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    event.event_id,
+                    event.run_id,
+                    event.event_type.value,
+                    details_json,
+                    event.created_at or now,
+                ),
+            )
         return event
 
-    def list_execution_events(self, company_id: str, run_id: str) -> List[ExecutionEventRecord]:
+    def list_execution_events(
+        self, company_id: str, run_id: str
+    ) -> list[ExecutionEventRecord]:
         with db_session(self.db_path) as conn:
             cursor = conn.cursor()
             rows = cursor.execute(
@@ -1156,28 +1456,48 @@ class MemoryRepository(BaseRepository):
                 WHERE r.company_id = ? AND e.run_id = ?
                 ORDER BY e.created_at ASC
                 """,
-                (company_id, run_id)
+                (company_id, run_id),
             ).fetchall()
             results = []
             for r in rows:
                 d = dict(r)
                 details = json.loads(d["details_json"]) if d.get("details_json") else {}
-                evt_type = ExecutionEventType(d["event_type"]) if d["event_type"] in [t.value for t in ExecutionEventType] else ExecutionEventType.RUN_STARTED
-                results.append(ExecutionEventRecord(
-                    event_id=d["event_id"],
-                    run_id=d["run_id"],
-                    event_type=evt_type,
-                    details=details,
-                    created_at=d.get("created_at")
-                ))
+                evt_type = (
+                    ExecutionEventType(d["event_type"])
+                    if d["event_type"] in [t.value for t in ExecutionEventType]
+                    else ExecutionEventType.RUN_STARTED
+                )
+                results.append(
+                    ExecutionEventRecord(
+                        event_id=d["event_id"],
+                        run_id=d["run_id"],
+                        event_type=evt_type,
+                        details=details,
+                        created_at=d.get("created_at"),
+                    )
+                )
             return results
 
-    def _parse_run_row(self, d: Dict[str, Any]) -> ExecutionRunRecord:
+    def _parse_run_row(self, d: dict[str, Any]) -> ExecutionRunRecord:
         scope = self._deserialize_scope(d.get("action_scope_json")) or ActionContext()
-        rules = json.loads(d["applied_rules_snapshot_json"]) if d.get("applied_rules_snapshot_json") else []
-        payload = json.loads(d["result_payload_json"]) if d.get("result_payload_json") else {}
-        status = RunStatus(d["status"]) if d["status"] in [s.value for s in RunStatus] else RunStatus.CREATED
-        conn_snapshot = json.loads(d["connection_snapshot_json"]) if d.get("connection_snapshot_json") else None
+        rules = (
+            json.loads(d["applied_rules_snapshot_json"])
+            if d.get("applied_rules_snapshot_json")
+            else []
+        )
+        payload = (
+            json.loads(d["result_payload_json"]) if d.get("result_payload_json") else {}
+        )
+        status = (
+            RunStatus(d["status"])
+            if d["status"] in [s.value for s in RunStatus]
+            else RunStatus.CREATED
+        )
+        conn_snapshot = (
+            json.loads(d["connection_snapshot_json"])
+            if d.get("connection_snapshot_json")
+            else None
+        )
 
         return ExecutionRunRecord(
             run_id=d["run_id"],
@@ -1197,19 +1517,21 @@ class MemoryRepository(BaseRepository):
             result_payload=payload,
             error_code=d.get("error_code"),
             error_detail=d.get("error_detail"),
-            created_at=d.get("created_at")
+            created_at=d.get("created_at"),
         )
 
-    def list_review_events(self, client_id: str, limit: int = 50) -> List[ReviewEvent]:
+    def list_review_events(self, client_id: str, limit: int = 50) -> list[ReviewEvent]:
         with db_session(self.db_path) as conn:
             cursor = conn.cursor()
             rows = cursor.execute(
                 "SELECT * FROM review_events WHERE client_id = ? ORDER BY created_at DESC LIMIT ?",
-                (client_id, limit)
+                (client_id, limit),
             ).fetchall()
             return [ReviewEvent(**dict(r)) for r in rows]
 
-    def get_review_events(self, candidate_id: Optional[str] = None, client_id: Optional[str] = None) -> List[ReviewEvent]:
+    def get_review_events(
+        self, candidate_id: str | None = None, client_id: str | None = None
+    ) -> list[ReviewEvent]:
         with db_session(self.db_path) as conn:
             cursor = conn.cursor()
             query = "SELECT * FROM review_events WHERE 1=1"
@@ -1225,23 +1547,21 @@ class MemoryRepository(BaseRepository):
             return [ReviewEvent(**dict(r)) for r in rows]
 
     def delete_session(self, session_id: str, client_id: str) -> bool:
-        with db_session(self.db_path) as conn:
-            with conn:
-                cur = conn.execute(
-                    "DELETE FROM extraction_sessions WHERE session_id = ? AND client_id = ?",
-                    (session_id, client_id)
-                )
-                return cur.rowcount > 0
+        with db_session(self.db_path) as conn, conn:
+            cur = conn.execute(
+                "DELETE FROM extraction_sessions WHERE session_id = ? AND client_id = ?",
+                (session_id, client_id),
+            )
+            return cur.rowcount > 0
 
     def purge_expired_sessions(self, client_id: str, retention_days: int = 90) -> int:
-        with db_session(self.db_path) as conn:
-            with conn:
-                cur = conn.execute(
-                    """
+        with db_session(self.db_path) as conn, conn:
+            cur = conn.execute(
+                """
                     DELETE FROM extraction_sessions 
                     WHERE client_id = ? 
                     AND datetime(extracted_at) < datetime('now', '-' || ? || ' days')
                     """,
-                    (client_id, retention_days)
-                )
-                return cur.rowcount
+                (client_id, retention_days),
+            )
+            return cur.rowcount

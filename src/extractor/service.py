@@ -1,47 +1,44 @@
-import uuid
-import re
 import logging
-from typing import Optional, List, Union
+import re
+import uuid
 
 from src.config import (
+    AWS_REGION,
+    BEDROCK_MODEL_ID,
+    FALLBACK_MODEL_IDS,
     LLM_PROVIDER,
     OPENAI_API_KEY,
     OPENAI_MODEL_ID,
-    AWS_REGION,
-    BEDROCK_MODEL_ID,
-    FALLBACK_MODEL_IDS
 )
-from src.models.schemas import (
-    CandidateRule,
-    ExtractedPayload,
-    ExtractionResult
-)
-from src.models.enums import RuleStatus, SourceType, ExtractionMode, LLMProviderType
 from src.extractor.prompt import build_user_prompt
 from src.extractor.providers import (
-    OpenAIProvider,
     BedrockProvider,
-    LocalFallbackProvider
+    LocalFallbackProvider,
+    OpenAIProvider,
 )
+from src.models.enums import ExtractionMode, LLMProviderType, RuleStatus, SourceType
+from src.models.schemas import CandidateRule, ExtractedPayload, ExtractionResult
 
 logger = logging.getLogger(__name__)
+
 
 class ProcessMemoryExtractorService:
     """
     Multi-Provider LLM Extraction Service.
     Supports OpenAI, AWS Bedrock, and Local Fallback with configurable cascade strategies.
     """
+
     def __init__(
         self,
-        provider: Optional[Union[str, LLMProviderType]] = None,
+        provider: str | LLMProviderType | None = None,
         offline_mode: bool = False,
-        openai_api_key: Optional[str] = None,
-        openai_model_id: Optional[str] = None,
-        bedrock_region: Optional[str] = None,
-        bedrock_model_id: Optional[str] = None,
+        openai_api_key: str | None = None,
+        openai_model_id: str | None = None,
+        bedrock_region: str | None = None,
+        bedrock_model_id: str | None = None,
         # Backward-compatible kwargs
-        region_name: Optional[str] = None,
-        model_id: Optional[str] = None
+        region_name: str | None = None,
+        model_id: str | None = None,
     ):
         if isinstance(provider, LLMProviderType):
             self.provider_type = provider
@@ -63,24 +60,28 @@ class ProcessMemoryExtractorService:
 
         # Providers
         self.fallback_provider = LocalFallbackProvider()
-        self.openai_provider = OpenAIProvider(api_key=self.openai_api_key, model_id=self.openai_model_id)
+        self.openai_provider = OpenAIProvider(
+            api_key=self.openai_api_key, model_id=self.openai_model_id
+        )
         self.bedrock_provider = BedrockProvider(
             region_name=self.bedrock_region,
             model_id=self.bedrock_model_id,
-            fallback_models=FALLBACK_MODEL_IDS
+            fallback_models=FALLBACK_MODEL_IDS,
         )
 
     @staticmethod
     def _clean_json_response(text: str) -> str:
         """Strips markdown fences from JSON output."""
         text = text.strip()
-        match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', text)
+        match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text)
         if match:
             return match.group(1).strip()
         return text
 
     @staticmethod
-    def _fallback_local_extraction(text: str, reason: str = "Fallback heuristic parser") -> ExtractedPayload:
+    def _fallback_local_extraction(
+        text: str, reason: str = "Fallback heuristic parser"
+    ) -> ExtractedPayload:
         """Deterministic keyword parser."""
         return LocalFallbackProvider().extract("", text, reason=reason)
 
@@ -104,46 +105,64 @@ class ProcessMemoryExtractorService:
         - "local":   Local Fallback
         """
         if self.offline_mode or self.provider_type == LLMProviderType.LOCAL:
-            return self.fallback_provider.extract(prompt, interaction_text, reason="Configured offline/local mode")
+            return self.fallback_provider.extract(
+                prompt, interaction_text, reason="Configured offline/local mode"
+            )
 
         cascade_errors = []
 
         # 1. Primary: OpenAI
-        if self.provider_type in (LLMProviderType.OPENAI, LLMProviderType.AUTO):
-            if self.openai_api_key:
-                try:
-                    return self.openai_provider.extract(prompt, interaction_text)
-                except Exception as e:
-                    logger.warning(f"OpenAI extraction failed: {e}. Falling back to next provider in cascade.")
-                    cascade_errors.append(f"OpenAI: {e}")
+        if (
+            self.provider_type in (LLMProviderType.OPENAI, LLMProviderType.AUTO)
+            and self.openai_api_key
+        ):
+            try:
+                return self.openai_provider.extract(prompt, interaction_text)
+            except Exception as e:  # noqa: BLE001 - Provider boundary preserves the fallback cascade.
+                logger.warning(
+                    f"OpenAI extraction failed: {e}. Falling back to next provider in cascade."
+                )
+                cascade_errors.append(f"OpenAI: {e}")
 
         # 2. Secondary / Primary: Bedrock
-        if self.provider_type in (LLMProviderType.BEDROCK, LLMProviderType.OPENAI, LLMProviderType.AUTO):
+        if self.provider_type in (
+            LLMProviderType.BEDROCK,
+            LLMProviderType.OPENAI,
+            LLMProviderType.AUTO,
+        ):
             try:
                 return self.bedrock_provider.extract(prompt, interaction_text)
-            except Exception as e:
-                logger.warning(f"Bedrock extraction failed: {e}. Falling back to next provider in cascade.")
+            except Exception as e:  # noqa: BLE001 - Boundary converts arbitrary provider failures to controlled outcomes.
+                logger.warning(
+                    f"Bedrock extraction failed: {e}. Falling back to next provider in cascade."
+                )
                 cascade_errors.append(f"Bedrock: {e}")
 
         # 3. Tertiary: Try OpenAI if Bedrock was primary and failed
         if self.provider_type == LLMProviderType.BEDROCK and self.openai_api_key:
             try:
                 return self.openai_provider.extract(prompt, interaction_text)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - Boundary converts arbitrary provider failures to controlled outcomes.
                 logger.warning(f"Secondary OpenAI extraction failed: {e}.")
                 cascade_errors.append(f"OpenAI fallback: {e}")
 
         # 4. Final Deterministic Fallback
-        reason_str = "; ".join(cascade_errors) if cascade_errors else "All cloud providers bypassed"
+        reason_str = (
+            "; ".join(cascade_errors)
+            if cascade_errors
+            else "All cloud providers bypassed"
+        )
         logger.info(f"Activating deterministic local fallback. Reason: {reason_str}")
-        return self.fallback_provider.extract(prompt, interaction_text, reason=reason_str)
+        return self.fallback_provider.extract(
+            prompt, interaction_text, reason=reason_str
+        )
 
     def extract_from_text(
         self,
         interaction_text: str,
         client_id: str,
         process_name: str = "general",
-        source_type: SourceType = SourceType.USER_INTERACTION
+        source_type: SourceType = SourceType.USER_INTERACTION,
     ) -> ExtractionResult:
         """
         Extracts candidate business rules from conversational text with provenance verification.
@@ -157,7 +176,7 @@ class ProcessMemoryExtractorService:
                 process_name=process_name,
                 candidates=[],
                 extraction_mode=ExtractionMode.LOCAL_FALLBACK,
-                error_detail="Empty input text"
+                error_detail="Empty input text",
             )
 
         session_id = f"sess_{uuid.uuid4().hex}"
@@ -165,11 +184,13 @@ class ProcessMemoryExtractorService:
 
         extracted_payload = self._invoke_cascade(user_prompt, interaction_text)
 
-        candidates: List[CandidateRule] = []
+        candidates: list[CandidateRule] = []
         for item in extracted_payload.rules:
             # Provenance Verbatim Substring Validation
             if not self._validate_provenance(item.source_quote, interaction_text):
-                logger.warning(f"Discarding candidate with unverified provenance quote: '{item.source_quote}'")
+                logger.warning(
+                    f"Discarding candidate with unverified provenance quote: '{item.source_quote}'"
+                )
                 continue
 
             cand_id = f"cand_{uuid.uuid4().hex}"
@@ -184,7 +205,7 @@ class ProcessMemoryExtractorService:
                 enforcement_mode=item.enforcement_mode,
                 source_quote=item.source_quote,
                 confidence=round(item.confidence, 3),
-                status=RuleStatus.PENDING_REVIEW
+                status=RuleStatus.PENDING_REVIEW,
             )
             candidates.append(candidate)
 
@@ -195,12 +216,13 @@ class ProcessMemoryExtractorService:
             candidates=candidates,
             extraction_mode=extracted_payload.extraction_mode,
             error_detail=extracted_payload.error_detail,
-            raw_payload=extracted_payload
+            raw_payload=extracted_payload,
         )
 
     def extract_candidates(self, *args, **kwargs) -> ExtractionResult:
         """Alias for extract_from_text."""
         return self.extract_from_text(*args, **kwargs)
+
 
 # Backward Compatibility Alias
 BedrockExtractorService = ProcessMemoryExtractorService

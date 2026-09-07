@@ -1,5 +1,5 @@
-from typing import Optional, List
 from src.models.schemas import CanonicalRule
+
 
 def calculate_specificity_score(rule: CanonicalRule) -> int:
     """
@@ -25,18 +25,19 @@ def calculate_specificity_score(rule: CanonicalRule) -> int:
             score += 1
     return score
 
+
 def matches_scope(
     rule: CanonicalRule,
     system: str = "odoo",
-    application: Optional[str] = None,
-    resource: Optional[str] = None,
-    operation: Optional[str] = None,
-    fields: Optional[List[str]] = None,
-    process_name: Optional[str] = None
+    application: str | None = None,
+    resource: str | None = None,
+    operation: str | None = None,
+    fields: list[str] | None = None,
+    process_name: str | None = None,
 ) -> bool:
     """
     Determines whether a canonical rule applies to a given scope context.
-    
+
     Matching rules:
     - Explicit system/application/resource/operation mismatches exclude rules completely.
     - Unspecified rule dimensions allow broader applicability.
@@ -46,9 +47,13 @@ def matches_scope(
     """
     # 1. Process name check
     target_process = application or process_name
-    if rule.process_name and rule.process_name.lower() not in ("general", "default"):
-        if target_process and rule.process_name.lower() != target_process.lower():
-            return False
+    if (
+        rule.process_name
+        and rule.process_name.lower() not in ("general", "default")
+        and target_process
+        and rule.process_name.lower() != target_process.lower()
+    ):
+        return False
 
     scope = rule.structured_scope
     if not scope:
@@ -56,9 +61,8 @@ def matches_scope(
         return True
 
     # 2. System check
-    if scope.system:
-        if not system or scope.system.lower() != system.lower():
-            return False
+    if scope.system and (not system or scope.system.lower() != system.lower()):
+        return False
 
     # 3. Application check
     if scope.application:
@@ -82,24 +86,24 @@ def matches_scope(
             return False
 
     # 6. Fields check: if filter supplied and rule has fields, must overlap
-    if scope.fields and len(scope.fields) > 0:
-        if fields and len(fields) > 0:
-            rule_field_set = {f.lower().strip() for f in scope.fields}
-            query_field_set = {f.lower().strip() for f in fields}
-            if not (rule_field_set & query_field_set):
-                return False
+    if scope.fields and len(scope.fields) > 0 and fields and len(fields) > 0:
+        rule_field_set = {f.lower().strip() for f in scope.fields}
+        query_field_set = {f.lower().strip() for f in fields}
+        if not (rule_field_set & query_field_set):
+            return False
 
     return True
 
+
 def filter_and_order_rules(
-    rules: List[CanonicalRule],
+    rules: list[CanonicalRule],
     system: str = "odoo",
-    application: Optional[str] = None,
-    resource: Optional[str] = None,
-    operation: Optional[str] = None,
-    fields: Optional[List[str]] = None,
-    process_name: Optional[str] = None
-) -> List[CanonicalRule]:
+    application: str | None = None,
+    resource: str | None = None,
+    operation: str | None = None,
+    fields: list[str] | None = None,
+    process_name: str | None = None,
+) -> list[CanonicalRule]:
     """
     Filters rules by scope and orders them deterministically:
     1. Specificity score DESC
@@ -107,7 +111,8 @@ def filter_and_order_rules(
     3. Rule ID ASC
     """
     matching = [
-        r for r in rules
+        r
+        for r in rules
         if matches_scope(
             r,
             system=system,
@@ -115,7 +120,7 @@ def filter_and_order_rules(
             resource=resource,
             operation=operation,
             fields=fields,
-            process_name=process_name
+            process_name=process_name,
         )
     ]
 
@@ -128,8 +133,6 @@ def filter_and_order_rules(
     deduped = list(latest_by_id.values())
 
     # Sort: specificity DESC, version DESC, rule_id ASC
-    deduped.sort(
-        key=lambda r: (-calculate_specificity_score(r), -r.version, r.rule_id)
-    )
+    deduped.sort(key=lambda r: (-calculate_specificity_score(r), -r.version, r.rule_id))
 
     return deduped
