@@ -12,17 +12,18 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "create_mcp_server",
-    "create_project_task",
     "get_company_context",
     "get_default_server",
     "get_default_service",
     "list_memory_candidates",
+    "register_downstream_mcp",
     "register_tools",
     "remember_company_instruction",
     "review_memory_candidate",
+    "run_downstream_request",
 ]
 
-# Lazy runtime dependencies - deferred to avoid initializing database/Odoo at import time
+# Lazy runtime dependencies - deferred to avoid initializing database at import time
 _default_service = None
 _default_server = None
 
@@ -43,8 +44,8 @@ def get_default_service():
 
 def register_tools(mcp_app: FastMCP, service: Any) -> None:
     """
-    Registers exactly the five approved public MCP tools onto the given FastMCP instance.
-    Used identically in production and isolated tests. All identity is resolved by the server/service.
+    Registers exactly the six approved public MCP tools onto the given FastMCP instance.
+    All caller identity is server-resolved from the authenticated request context.
     """
 
     # --- TOOL 1: REMEMBER COMPANY INSTRUCTION ---
@@ -57,7 +58,7 @@ def register_tools(mcp_app: FastMCP, service: Any) -> None:
         Does NOT activate or enforce the rule until approved by a company owner or reviewer.
 
         Args:
-            instruction_text: Natural language statement of the company policy, constraint, or naming rule.
+            instruction_text: Natural language statement of the company policy, constraint, or convention.
             context_hint: Optional structured dictionary indicating target system, application, resource, or field.
 
         Returns:
@@ -137,7 +138,7 @@ def register_tools(mcp_app: FastMCP, service: Any) -> None:
             application: Target application, e.g. 'project'.
             resource: Target resource/model, e.g. 'project.task'.
             operation: Target operation, e.g. 'create'.
-            fields: Optional list of field names, e.g. ['definition_of_done'].
+            fields: Optional list of field names.
 
         Returns:
             JSON string containing MemoryPack with active rules, versions, scopes, and constraints.
@@ -151,35 +152,68 @@ def register_tools(mcp_app: FastMCP, service: Any) -> None:
         )
         return pack.model_dump_json(indent=2)
 
-    # --- TOOL 5: CREATE PROJECT TASK (MANAGED ODOO WRITE TOOL) ---
+    # --- TOOL 5: REGISTER DOWNSTREAM MCP SERVER ---
     @mcp_app.tool()
-    def create_project_task(
-        title: str,
-        description: str,
-        definition_of_done: list[str] | None = None,
-        project_id: int | None = None,
+    def register_downstream_mcp(
+        server_id: str,
+        endpoint: str,
+        transport: str = "streamable_http",
+        available_tools: list[dict[str, Any]] | None = None,
+        secret_ref: str | None = None,
+        supported_action_contexts: list[dict[str, Any]] | None = None,
+    ) -> str:
+        """
+        Registers or updates a downstream MCP server configuration for the authenticated company.
+
+        Args:
+            server_id: Unique identifier for the server (e.g. 'odoo17', 'jira-mcp').
+            endpoint: URL endpoint or connection identifier.
+            transport: Transport mechanism ('streamable_http', 'stdio', 'odoo_xmlrpc', 'internal_mock').
+            available_tools: List of tool definition dicts with 'name', 'description', and 'input_schema'.
+            secret_ref: Optional reference to credentials in Secrets Manager or environment.
+            supported_action_contexts: Optional list of supported ActionContext dicts.
+
+        Returns:
+            JSON string containing RegisterDownstreamMCPResult.
+        """
+        result = service.register_downstream_mcp(
+            server_id=server_id,
+            endpoint=endpoint,
+            transport=transport,
+            available_tools=available_tools,
+            secret_ref=secret_ref,
+            supported_action_contexts=supported_action_contexts,
+        )
+        return result.model_dump_json(indent=2)
+
+    # --- TOOL 6: RUN DOWNSTREAM REQUEST (ORCHESTRATION ENTRYPOINT) ---
+    @mcp_app.tool()
+    def run_downstream_request(
+        user_request: str,
+        action_context: dict[str, Any] | None = None,
+        downstream_hint: str | None = None,
         correlation_id: str | None = None,
     ) -> str:
         """
-        Managed Odoo Task Creation Tool.
-        Retrieves approved company memory internally, validates required fields (e.g. Definition of Done),
-        creates an execution evidence record, and executes the task creation in Odoo with read-back verification.
+        Main orchestration entrypoint.
+        Retrieves approved company memory matching the action context, injects memory into
+        a Bedrock prompt alongside registered tools, requires a structured tool call from the model,
+        validates the call against downstream schemas, and executes the downstream tool safely.
 
         Args:
-            title: Task name / title.
-            description: Task description in plain text.
-            definition_of_done: Optional list of measurable Definition of Done checklist items.
-            project_id: Odoo project ID, defaults to 142 (IH/AI/Odoo Tutor).
-            correlation_id: Unique idempotency key to prevent duplicate creation on retry.
+            user_request: Natural language request from the user or client agent.
+            action_context: Target action context dict (system, application, resource, operation, fields).
+            downstream_hint: Optional server or tool name hint.
+            correlation_id: Optional unique idempotency tracking identifier.
 
         Returns:
-            JSON string containing TaskCreationResult with run_id, correlation_id, status, odoo_task_id, and URL.
+            JSON string containing OrchestrationResult.
         """
-        result = service.create_project_task(
-            title=title,
-            description=description,
-            definition_of_done=definition_of_done,
-            project_id=project_id,
+        scope = ActionContext(**action_context) if action_context else None
+        result = service.run_downstream_request(
+            user_request=user_request,
+            action_context=scope,
+            downstream_hint=downstream_hint,
             correlation_id=correlation_id,
         )
         return result.model_dump_json(indent=2)
@@ -187,7 +221,7 @@ def register_tools(mcp_app: FastMCP, service: Any) -> None:
 
 def create_mcp_server(service: Any | None = None) -> FastMCP:
     """
-    Factory constructing a FastMCP server with the five approved tools registered.
+    Factory constructing a FastMCP server with the six approved tools registered.
     Accepts an injected service instance (production HostedProcessMemoryService or Fake for tests).
     """
     svc = service if service is not None else get_default_service()
@@ -264,18 +298,36 @@ def get_company_context(
     return pack.model_dump_json(indent=2)
 
 
-def create_project_task(
-    title: str,
-    description: str,
-    definition_of_done: list[str] | None = None,
-    project_id: int | None = None,
+def register_downstream_mcp(
+    server_id: str,
+    endpoint: str,
+    transport: str = "streamable_http",
+    available_tools: list[dict[str, Any]] | None = None,
+    secret_ref: str | None = None,
+    supported_action_contexts: list[dict[str, Any]] | None = None,
+) -> str:
+    result = get_default_service().register_downstream_mcp(
+        server_id=server_id,
+        endpoint=endpoint,
+        transport=transport,
+        available_tools=available_tools,
+        secret_ref=secret_ref,
+        supported_action_contexts=supported_action_contexts,
+    )
+    return result.model_dump_json(indent=2)
+
+
+def run_downstream_request(
+    user_request: str,
+    action_context: dict[str, Any] | None = None,
+    downstream_hint: str | None = None,
     correlation_id: str | None = None,
 ) -> str:
-    result = get_default_service().create_project_task(
-        title=title,
-        description=description,
-        definition_of_done=definition_of_done,
-        project_id=project_id,
+    scope = ActionContext(**action_context) if action_context else None
+    result = get_default_service().run_downstream_request(
+        user_request=user_request,
+        action_context=scope,
+        downstream_hint=downstream_hint,
         correlation_id=correlation_id,
     )
     return result.model_dump_json(indent=2)

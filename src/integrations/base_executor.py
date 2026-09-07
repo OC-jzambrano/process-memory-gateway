@@ -45,3 +45,13 @@ class TaskExecutor(ABC):
         Reads back an existing task by ID to verify record integrity.
         """
         ...
+
+    @abstractmethod
+    def search_project_tasks(
+        self, name: str, project_id: int | None = None
+    ) -> list[TaskRecord]:
+        """
+        Searches for tasks matching title and optionally project_id.
+        Used for safe operator reconciliation verification.
+        """
+        ...

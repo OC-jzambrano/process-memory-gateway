@@ -7,11 +7,12 @@ from mcp.shared.memory import create_connected_server_and_client_session
 
 from server import (
     create_mcp_server,
-    create_project_task,
     get_company_context,
     list_memory_candidates,
+    register_downstream_mcp,
     remember_company_instruction,
     review_memory_candidate,
+    run_downstream_request,
 )
 from src.api.auth_context import RequestContext, set_current_context
 from src.api.memory_tools import ProcessMemoryTools
@@ -25,7 +26,6 @@ from src.models.enums import (
     RoleType,
     RuleStatus,
     RuleType,
-    RunStatus,
 )
 from src.models.schemas import (
     ActionContext,
@@ -36,8 +36,9 @@ from src.models.schemas import (
     Membership,
     MemoryPack,
     MemoryPackRuleItem,
+    OrchestrationResult,
+    RegisterDownstreamMCPResult,
     ReviewResult,
-    TaskCreationResult,
     User,
 )
 from src.storage.repository import MemoryRepository
@@ -167,34 +168,56 @@ class FakeProcessMemoryService:
             ],
         )
 
-    def create_project_task(
+    def register_downstream_mcp(
         self,
-        title: str,
-        description: str,
-        definition_of_done: list[str] | None = None,
-        project_id: int | None = None,
-        correlation_id: str | None = None,
-    ) -> TaskCreationResult:
+        server_id: str,
+        endpoint: str,
+        transport: str = "streamable_http",
+        available_tools: list[dict[str, Any]] | None = None,
+        secret_ref: str | None = None,
+        supported_action_contexts: list[dict[str, Any]] | None = None,
+    ) -> RegisterDownstreamMCPResult:
         self.invocations.append(
             {
-                "method": "create_project_task",
-                "title": title,
-                "description": description,
-                "definition_of_done": definition_of_done,
-                "project_id": project_id,
+                "method": "register_downstream_mcp",
+                "server_id": server_id,
+                "endpoint": endpoint,
+                "transport": transport,
+                "available_tools": available_tools,
+                "secret_ref": secret_ref,
+                "supported_action_contexts": supported_action_contexts,
+            }
+        )
+        return RegisterDownstreamMCPResult(
+            status="registered",
+            server_id=server_id,
+            transport=transport,
+            tool_count=len(available_tools) if available_tools else 0,
+            message=f"Downstream MCP server '{server_id}' registered successfully.",
+        )
+
+    def run_downstream_request(
+        self,
+        user_request: str,
+        action_context: ActionContext | dict[str, Any] | None = None,
+        downstream_hint: str | None = None,
+        correlation_id: str | None = None,
+    ) -> OrchestrationResult:
+        self.invocations.append(
+            {
+                "method": "run_downstream_request",
+                "user_request": user_request,
+                "action_context": action_context,
+                "downstream_hint": downstream_hint,
                 "correlation_id": correlation_id,
             }
         )
-        return TaskCreationResult(
-            status=RunStatus.CREATED,
-            run_id="run_fake_123",
+        return OrchestrationResult(
+            success=True,
             correlation_id=correlation_id or "corr_fake_123",
-            applied_rule_ids=["rule_fake_999"],
-            missing_information=[],
-            odoo_task_id=9876,
-            odoo_task_url="https://community.odooconcept.com/web#id=9876",
-            task_name=title,
-            message=f"Task #9876 successfully created and verified in Odoo Project {project_id or 142}.",
+            server_id="odoo-main",
+            tool_name="create_record",
+            result={"id": 9876, "name": "Task from user request"},
         )
 
 
@@ -210,11 +233,11 @@ def test_no_runtime_db_or_odoo_on_server_module_import():
 
 
 # =========================================================================
-# 2. Public Protocol Discovery: Exact 5 Tools
+# 2. Public Protocol Discovery: Exact 6 Tools
 # =========================================================================
 @pytest.mark.anyio
-async def test_protocol_tools_list_exact_five_allowlist():
-    """Verify MCP protocol tools/list returns exactly the five approved tools via official in-memory session."""
+async def test_protocol_tools_list_exact_six_allowlist():
+    """Verify MCP protocol tools/list returns exactly the six approved tools via official in-memory session."""
     fake_svc = FakeProcessMemoryService()
     server = create_mcp_server(service=fake_svc)
 
@@ -226,7 +249,8 @@ async def test_protocol_tools_list_exact_five_allowlist():
             "list_memory_candidates",
             "review_memory_candidate",
             "get_company_context",
-            "create_project_task",
+            "register_downstream_mcp",
+            "run_downstream_request",
         }
         assert advertised_names == expected_names, (
             f"MCP protocol discovery mismatch! Expected {expected_names}, got {advertised_names}"
@@ -307,6 +331,13 @@ async def test_protocol_calling_removed_legacy_tools_returns_unknown_tool_and_ze
                 "principal": {"user_id": "u1"},
             },
         ),
+        (
+            "create_project_task",
+            {
+                "title": "Old Task",
+                "description": "Legacy",
+            },
+        ),
     ]
 
     async with create_connected_server_and_client_session(server) as session:
@@ -327,11 +358,11 @@ async def test_protocol_calling_removed_legacy_tools_returns_unknown_tool_and_ze
 
 
 # =========================================================================
-# 5. Protocol Tool Dispatch: Verify All 5 Approved Tools
+# 5. Protocol Tool Dispatch: Verify All 6 Approved Tools
 # =========================================================================
 @pytest.mark.anyio
-async def test_protocol_dispatch_all_five_approved_tools():
-    """Verify end-to-end dispatch for all 5 approved tools via MCP protocol with fake service."""
+async def test_protocol_dispatch_all_six_approved_tools():
+    """Verify end-to-end dispatch for all 6 approved tools via MCP protocol with fake service."""
     fake_svc = FakeProcessMemoryService()
     server = create_mcp_server(service=fake_svc)
 
@@ -388,30 +419,60 @@ async def test_protocol_dispatch_all_five_approved_tools():
         assert len(data4["rules"]) == 1
         assert data4["rules"][0]["rule_id"] == "rule_fake_999"
 
-        # 5. create_project_task
+        # 5. register_downstream_mcp
         res5 = await session.call_tool(
-            "create_project_task",
+            "register_downstream_mcp",
             arguments={
-                "title": "[TEST] Protocol task",
-                "description": "Task created via MCP protocol session",
-                "definition_of_done": ["DoD criterion 1"],
-                "project_id": 142,
-                "correlation_id": "corr_protocol_123",
+                "server_id": "odoo-main",
+                "endpoint": "https://erp.example.com",
+                "transport": "odoo_xmlrpc",
+                "available_tools": [
+                    {
+                        "name": "create_record",
+                        "description": "Create record in Odoo",
+                        "input_schema": {
+                            "type": "object",
+                            "properties": {
+                                "model": {"type": "string"},
+                                "values": {"type": "object"},
+                            },
+                            "required": ["model", "values"],
+                        },
+                    }
+                ],
             },
         )
         assert res5.isError is not True
         data5 = json.loads(res5.content[0].text)
-        assert data5["status"] == "created"
-        assert data5["odoo_task_id"] == 9876
+        assert data5["status"] == "registered"
+        assert data5["server_id"] == "odoo-main"
 
-    # Verify all 5 dispatches reached the fake service with expected methods
+        # 6. run_downstream_request
+        res6 = await session.call_tool(
+            "run_downstream_request",
+            arguments={
+                "user_request": "Create a task for bug fix",
+                "action_context": {
+                    "system": "odoo",
+                    "resource": "project.task",
+                    "operation": "create",
+                },
+            },
+        )
+        assert res6.isError is not True
+        data6 = json.loads(res6.content[0].text)
+        assert data6["success"] is True
+        assert data6["tool_name"] == "create_record"
+
+    # Verify all 6 dispatches reached the fake service with expected methods
     dispatched_methods = [inv["method"] for inv in fake_svc.invocations]
     assert dispatched_methods == [
         "remember_company_instruction",
         "list_memory_candidates",
         "review_memory_candidate",
         "get_company_context",
-        "create_project_task",
+        "register_downstream_mcp",
+        "run_downstream_request",
     ]
 
 
@@ -437,7 +498,8 @@ async def test_regression_sensitivity_fails_when_legacy_tool_registered():
             "list_memory_candidates",
             "review_memory_candidate",
             "get_company_context",
-            "create_project_task",
+            "register_downstream_mcp",
+            "run_downstream_request",
         }
         # The allowlist check MUST fail
         assert advertised_names != expected_names
@@ -483,7 +545,7 @@ def test_internal_process_memory_tools_lifecycle():
 
 
 # =========================================================================
-# 8. End-to-End Lifecycle of 5 Public Tools (Service Integration)
+# 8. End-to-End Lifecycle of 6 Public Tools (Service Integration)
 # =========================================================================
 @pytest.fixture
 def clean_context():
@@ -523,18 +585,27 @@ def clean_context():
     )
     set_current_context(ctx)
     from server import get_default_service
-    from src.integrations.mock_executor import MockTaskExecutor
+    from src.models.schemas import OrchestrationToolCall
+    from src.orchestration.bedrock_orchestrator import BedrockOrchestrator
 
     svc = get_default_service()
-    old_executor = svc._injected_executor
-    svc._injected_executor = MockTaskExecutor(default_project_id=142)
+    old_orchestrator = svc.orchestrator
+
+    def mock_orchestrate(**kwargs):
+        return OrchestrationToolCall(
+            server_id="test_server",
+            tool_name="create_record",
+            arguments={"model": "project.task", "values": {"name": "Test record"}},
+        )
+
+    svc.orchestrator = BedrockOrchestrator(mock_handler=mock_orchestrate)
     yield ctx
     set_current_context(None)
-    svc._injected_executor = old_executor
+    svc.orchestrator = old_orchestrator
 
 
-def test_public_five_tools_lifecycle(clean_context):
-    """Verify end-to-end execution of the 5 public tools."""
+def test_public_six_tools_lifecycle(clean_context):
+    """Verify end-to-end execution of the 6 public tools."""
     # 1. remember_company_instruction
     stage_json = remember_company_instruction(
         instruction_text="Every task must have acceptance criteria."
@@ -564,12 +635,34 @@ def test_public_five_tools_lifecycle(clean_context):
     context_data = json.loads(context_json)
     assert len(context_data["rules"]) >= 1
 
-    # 5. create_project_task
-    task_json = create_project_task(
-        title="[PM-TEST] Public tool task",
-        description="Verify public task tool works",
-        definition_of_done=["Task is verified"],
-        correlation_id=f"corr_{uuid.uuid4().hex}",
+    # 5. register_downstream_mcp
+    reg_json = register_downstream_mcp(
+        server_id="test_server",
+        endpoint="mock://test",
+        transport="internal_mock",
+        available_tools=[
+            {
+                "name": "create_record",
+                "description": "Create a record",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "model": {"type": "string"},
+                        "values": {"type": "object"},
+                    },
+                    "required": ["model", "values"],
+                },
+            }
+        ],
     )
-    task_data = json.loads(task_json)
-    assert task_data["status"] in ("created", "needs_clarification")
+    reg_data = json.loads(reg_json)
+    assert reg_data["status"] == "registered"
+
+    # 6. run_downstream_request
+    req_json = run_downstream_request(
+        user_request="Create a task for bug fix",
+        action_context={"system": "odoo", "resource": "project.task", "operation": "create"},
+    )
+    req_data = json.loads(req_json)
+    assert req_data["success"] is True
+    assert req_data["tool_name"] == "create_record"

@@ -1,4 +1,5 @@
 import html
+from typing import Any
 
 from src.integrations.base_executor import TaskExecutor
 from src.integrations.odoo17_xmlrpc import OdooAccessDeniedError, OdooExecutionError
@@ -174,3 +175,37 @@ class MockTaskExecutor(TaskExecutor):
 
     def get_project_task(self, task_id: int) -> TaskRecord | None:
         return self.tasks.get(task_id)
+
+    def search_project_tasks(
+        self, name: str, project_id: int | None = None
+    ) -> list[TaskRecord]:
+        target_name = name.strip().lower()
+        results = []
+        for t in self.tasks.values():
+            if t.name.strip().lower() == target_name and (
+                project_id is None or t.project_id == project_id
+            ):
+                results.append(t)
+        return results
+
+    def create_record(self, model: str, values: dict[str, Any]) -> dict[str, Any]:
+        if self.simulate_access_error:
+            raise OdooAccessDeniedError("Access denied")
+        if self.simulate_timeout:
+            raise TimeoutError("Request timed out")
+        record_id = self._next_id
+        self._next_id += 1
+        name = values.get("name", "Task")
+        project_id = values.get("project_id", self.default_project_id)
+        description = values.get("description", "")
+        self.tasks[record_id] = TaskRecord(
+            id=record_id,
+            name=name,
+            description=description,
+            project_id=project_id,
+        )
+        return {
+            "id": record_id,
+            "model": model,
+            "values": values,
+        }

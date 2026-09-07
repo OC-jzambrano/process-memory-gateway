@@ -1,15 +1,13 @@
 from abc import ABC, abstractmethod
-from typing import Any
 
-from src.models.enums import DecisionType, RuleStatus, RunStatus
+from src.models.enums import DecisionType, RuleStatus
 from src.models.schemas import (
     ActionContext,
     CandidateRule,
     CanonicalRule,
     Company,
     DeterministicConstraint,
-    ExecutionEventRecord,
-    ExecutionRunRecord,
+    DownstreamMCPServer,
     ExtractionSession,
     Membership,
     OdooConnectionConfig,
@@ -122,61 +120,28 @@ class BaseRepository(ABC):
         notes: str | None = None,
     ) -> CanonicalRule: ...
 
-    # 6. Execution Runs & Audit Evidence
+    # 6. Downstream MCP Server Registry
     @abstractmethod
-    def create_execution_run(self, run: ExecutionRunRecord) -> ExecutionRunRecord: ...
+    def upsert_downstream_mcp(
+        self, server: DownstreamMCPServer
+    ) -> DownstreamMCPServer: ...
 
     @abstractmethod
-    def claim_execution_run(
-        self, run: ExecutionRunRecord, event: ExecutionEventRecord
-    ) -> tuple[bool, ExecutionRunRecord]: ...
+    def get_downstream_mcp(
+        self, company_id: str, server_id: str
+    ) -> DownstreamMCPServer | None: ...
 
     @abstractmethod
-    def record_validation_blocked(
-        self, run: ExecutionRunRecord, event: ExecutionEventRecord
-    ) -> ExecutionRunRecord: ...
+    def list_downstream_mcps(
+        self, company_id: str
+    ) -> list[DownstreamMCPServer]: ...
 
     @abstractmethod
-    def transition_execution_run(
-        self,
-        company_id: str,
-        run_id: str,
-        execution_token: str,
-        new_status: RunStatus,
-        event: ExecutionEventRecord,
-        odoo_task_id: int | None = None,
-        odoo_task_url: str | None = None,
-        result_payload: dict[str, Any] | None = None,
-        error_code: str | None = None,
-        error_detail: str | None = None,
+    def delete_downstream_mcp(
+        self, company_id: str, server_id: str
     ) -> bool: ...
 
-    @abstractmethod
-    def reconcile_abandoned_runs(self) -> int: ...
-
-    @abstractmethod
-    def get_execution_run(
-        self, run_id: str, company_id: str | None = None
-    ) -> ExecutionRunRecord | None: ...
-
-    @abstractmethod
-    def get_execution_run_by_correlation(
-        self, company_id: str, correlation_id: str
-    ) -> ExecutionRunRecord | None: ...
-
-    @abstractmethod
-    def update_execution_run(self, run: ExecutionRunRecord) -> ExecutionRunRecord: ...
-
-    @abstractmethod
-    def add_execution_event(
-        self, event: ExecutionEventRecord
-    ) -> ExecutionEventRecord: ...
-
-    @abstractmethod
-    def list_execution_events(
-        self, company_id: str, run_id: str
-    ) -> list[ExecutionEventRecord]: ...
-
+    # 7. Audit Trail
     @abstractmethod
     def list_review_events(
         self, client_id: str, limit: int = 50

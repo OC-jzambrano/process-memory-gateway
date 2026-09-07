@@ -65,6 +65,13 @@ class ExtractionMode(str, Enum):
     LOCAL_FALLBACK = "local_fallback"
 
 
+class MCPTransport(str, Enum):
+    STREAMABLE_HTTP = "streamable_http"
+    STDIO = "stdio"
+    ODOO_XMLRPC = "odoo_xmlrpc"
+    INTERNAL_MOCK = "internal_mock"
+
+
 class RoleType(str, Enum):
     OWNER = "owner"
     REVIEWER = "reviewer"

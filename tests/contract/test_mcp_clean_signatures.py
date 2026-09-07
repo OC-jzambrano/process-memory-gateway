@@ -1,22 +1,17 @@
 """
 Supplementary contract tests verifying Python-level function signatures for MCP tools.
-
-NOTE: The primary protocol-level JSONSchema security contract is enforced via
-in-memory protocol sessions in:
-    tests.contract.test_mcp_server.test_protocol_advertised_schemas_have_no_caller_controlled_identity
-
-This module provides fast supplementary unit-level verification on Python callables.
 """
 
 import inspect
 
 import server
 from server import (
-    create_project_task,
     get_company_context,
     list_memory_candidates,
+    register_downstream_mcp,
     remember_company_instruction,
     review_memory_candidate,
+    run_downstream_request,
 )
 
 
@@ -41,7 +36,8 @@ def test_public_mcp_tools_contain_no_caller_controlled_identity_args():
         list_memory_candidates,
         review_memory_candidate,
         get_company_context,
-        create_project_task,
+        register_downstream_mcp,
+        run_downstream_request,
     ]
 
     for tool_func in tools:
@@ -62,6 +58,7 @@ def test_server_module_does_not_export_legacy_tools():
         "get_candidate_rules",
         "get_active_rules",
         "review_candidate_rule",
+        "create_project_task",
     ]
     for legacy_name in legacy_tools:
         assert not hasattr(server, legacy_name), (

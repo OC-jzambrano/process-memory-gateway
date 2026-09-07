@@ -11,6 +11,7 @@ from src.models.enums import (
     ExecutionEventType,
     ExecutionPhase,
     ExtractionMode,
+    MCPTransport,
     MembershipStatus,
     RoleType,
     RuleStatus,
@@ -245,6 +246,49 @@ class ReviewResult(BaseModel):
     rule_id: str | None = None
     version: int | None = None
     message: str
+
+
+# 10. Downstream MCP Registry & Orchestration Models
+class DownstreamToolDefinition(BaseModel):
+    name: str = Field(min_length=1)
+    description: str = Field(default="")
+    input_schema: dict[str, Any] = Field(default_factory=dict)
+
+
+class DownstreamMCPServer(BaseModel):
+    company_id: str = Field(min_length=1)
+    server_id: str = Field(min_length=1)
+    endpoint: str = Field(min_length=1)
+    transport: MCPTransport = Field(default=MCPTransport.STREAMABLE_HTTP)
+    available_tools: list[DownstreamToolDefinition] = Field(default_factory=list)
+    secret_ref: str | None = None
+    supported_action_contexts: list[ActionContext] = Field(default_factory=list)
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class RegisterDownstreamMCPResult(BaseModel):
+    status: str = "registered"
+    server_id: str
+    transport: str
+    tool_count: int
+    message: str
+
+
+class OrchestrationToolCall(BaseModel):
+    server_id: str
+    tool_name: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+class OrchestrationResult(BaseModel):
+    success: bool
+    correlation_id: str
+    server_id: str
+    tool_name: str
+    result: Any = None
+    error: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class TaskCreationResult(BaseModel):

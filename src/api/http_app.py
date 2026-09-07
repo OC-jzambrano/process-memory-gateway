@@ -1,3 +1,4 @@
+import contextlib
 import logging
 
 from starlette.applications import Starlette
@@ -23,6 +24,7 @@ from src.config import (
 )
 from src.storage.db import get_connection
 from src.storage.repository import MemoryRepository
+from src.utils.privacy import sanitize_evidence
 
 logger = logging.getLogger(__name__)
 
@@ -46,12 +48,23 @@ async def health_ready(request: Request) -> JSONResponse:
     db_ok = True
     schema_version: int | None = None
 
-    # 1. Storage mount check
+    # 1. Storage mount check and writability probe
     if not DATA_DIR.exists() or not DATA_DIR.is_dir():
         storage_ok = False
         logger.error(
             "Readiness check failed: persistent storage mount is not available."
         )
+    else:
+        try:
+            probe = DATA_DIR / ".readiness_probe"
+            probe.write_text("probe")
+            probe.unlink(missing_ok=True)
+        except Exception as e:  # noqa: BLE001 - Catch filesystem errors during probe check
+            storage_ok = False
+            logger.error(
+                "Readiness check failed: persistent storage is not writable: %s",
+                sanitize_evidence(str(e)),
+            )
 
     # 2. Database connectivity & schema migrations check
     try:
@@ -73,7 +86,7 @@ async def health_ready(request: Request) -> JSONResponse:
         db_ok = False
         logger.error(
             "Readiness check failed: database connectivity or schema verification error: %s",
-            str(e),
+            sanitize_evidence(str(e)),
         )
 
     if not storage_ok or not db_ok:
@@ -190,7 +203,7 @@ class CompanyMCPHandler:
             )
         except AuthenticationError as e:
             res = JSONResponse(
-                {"error": "unauthorized", "message": str(e)},
+                {"error": "unauthorized", "message": sanitize_evidence(str(e))},
                 status_code=401,
                 headers={"WWW-Authenticate": 'Bearer error="invalid_token"'},
             )
@@ -198,7 +211,8 @@ class CompanyMCPHandler:
             return
         except AuthorizationError as e:
             res = JSONResponse(
-                {"error": "forbidden", "message": str(e)}, status_code=403
+                {"error": "forbidden", "message": sanitize_evidence(str(e))},
+                status_code=403,
             )
             await res(scope, receive, send)
             return
@@ -215,11 +229,17 @@ class CompanyMCPHandler:
             set_current_context(None)
 
 
+@contextlib.asynccontextmanager
+async def app_lifespan(app: Starlette):
+    async with fastmcp_http_app.router.lifespan_context(app):
+        yield
+
+
 def create_app() -> Starlette:
     """Creates the ASGI application instance."""
     app = Starlette(
         debug=False,
-        lifespan=fastmcp_http_app.router.lifespan_context,
+        lifespan=app_lifespan,
         routes=[
             Route("/health/live", health_live, methods=["GET"]),
             Route("/health/ready", health_ready, methods=["GET"]),

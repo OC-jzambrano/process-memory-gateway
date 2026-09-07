@@ -91,10 +91,21 @@ jobs:
             --comment "Deploy image $IMAGE_TAG" \
             --parameters commands='[
               "set -e",
+              "mountpoint -q /mnt/process-memory-data || (echo \"FATAL: Persistent volume /mnt/process-memory-data is not mounted!\" && exit 1)",
               "cd /opt/process-memory",
               "docker exec mcp-server python scripts/backup_sqlite.py || true",
               "docker pull '"$IMAGE_DIGEST"'",
-              "sed -i \"s|image: .*|image: '"$IMAGE_DIGEST"'|\" docker-compose.yml",
+              "touch .env",
+              "cp .env .env.bak",
+              "grep -v ^MCP_IMAGE= .env.bak > .env || true",
+              "echo \"MCP_IMAGE='"$IMAGE_DIGEST"'\" >> .env",
               "docker compose up -d",
-              "curl -f http://localhost:8000/health/ready || (echo \"Health check failed, rolling back!\" && docker compose rollback && exit 1)"
+              "if ! curl -fsS --retry 5 --retry-delay 3 http://localhost:8000/health/ready; then",
+              "  echo \"Health check failed, rolling back to previous image configuration!\"",
+              "  mv .env.bak .env",
+              "  docker compose up -d",
+              "  exit 1",
+              "fi",
+              "rm -f .env.bak",
+              "echo \"Deployment of '"$IMAGE_DIGEST"' completed successfully.\""
             ]'

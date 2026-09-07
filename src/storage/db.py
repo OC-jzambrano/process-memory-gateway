@@ -178,55 +178,24 @@ BEGIN
     SELECT RAISE(FAIL, 'review_events audit trail is strictly append-only and cannot be deleted.');
 END;
 
--- 9. Execution Runs (Managed Execution Records with Idempotency)
-CREATE TABLE IF NOT EXISTS execution_runs (
-    run_id                      TEXT PRIMARY KEY,
-    company_id                  TEXT NOT NULL,
-    user_id                     TEXT NOT NULL,
-    correlation_id              TEXT NOT NULL,
-    action_scope_json           TEXT NOT NULL,
-    adapter_kind                TEXT NOT NULL DEFAULT 'odoo17_xmlrpc',
-    status                      TEXT NOT NULL DEFAULT 'created',
-    redacted_input_hash         TEXT,
-    hash_algorithm_version      TEXT DEFAULT 'v2',
-    connection_snapshot_json    TEXT,
-    execution_token             TEXT,
-    applied_rules_snapshot_json TEXT,
-    odoo_task_id                INTEGER,
-    odoo_task_url               TEXT,
-    result_payload_json         TEXT,
-    error_code                  TEXT,
-    error_detail                TEXT,
-    created_at                  TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(company_id, correlation_id)
+-- 9. Downstream MCP Servers Registry
+CREATE TABLE IF NOT EXISTS downstream_mcp_servers (
+    company_id                      TEXT NOT NULL,
+    server_id                       TEXT NOT NULL,
+    endpoint                        TEXT NOT NULL,
+    transport                       TEXT NOT NULL DEFAULT 'streamable_http',
+    available_tools_json            TEXT NOT NULL DEFAULT '[]',
+    secret_ref                      TEXT,
+    supported_action_contexts_json  TEXT NOT NULL DEFAULT '[]',
+    created_at                      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at                      TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (company_id, server_id),
+    FOREIGN KEY (company_id) REFERENCES companies(company_id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_execution_runs_company ON execution_runs(company_id, created_at);
-CREATE INDEX IF NOT EXISTS idx_execution_runs_correlation ON execution_runs(company_id, correlation_id);
-
--- 10. Execution Events (Append-Only Execution Audit Trail)
-CREATE TABLE IF NOT EXISTS execution_events (
-    event_id        TEXT PRIMARY KEY,
-    run_id          TEXT NOT NULL REFERENCES execution_runs(run_id) ON DELETE CASCADE,
-    event_type      TEXT NOT NULL,
-    details_json    TEXT,
-    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_execution_events_run ON execution_events(run_id);
-
-CREATE TRIGGER IF NOT EXISTS trg_prevent_execution_events_update
-BEFORE UPDATE ON execution_events
-BEGIN
-    SELECT RAISE(FAIL, 'execution_events audit trail is strictly append-only and cannot be modified.');
-END;
-
-CREATE TRIGGER IF NOT EXISTS trg_prevent_execution_events_delete
-BEFORE DELETE ON execution_events
-BEGIN
-    SELECT RAISE(FAIL, 'execution_events audit trail is strictly append-only and cannot be deleted.');
-END;
+CREATE INDEX IF NOT EXISTS idx_downstream_mcps_company ON downstream_mcp_servers(company_id);
 """
+
 
 
 def get_connection(db_path: str | Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
@@ -325,11 +294,41 @@ def _migrate_columns_if_needed(conn: sqlite3.Connection) -> None:
         cursor.execute("ALTER TABLE execution_runs ADD COLUMN error_code TEXT;")
 
 
+def _run_migration_v2(conn: sqlite3.Connection) -> None:
+    """Migration v2: registers downstream_mcp_servers and cleans up deprecated execution tables."""
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS downstream_mcp_servers (
+            company_id                      TEXT NOT NULL,
+            server_id                       TEXT NOT NULL,
+            endpoint                        TEXT NOT NULL,
+            transport                       TEXT NOT NULL DEFAULT 'streamable_http',
+            available_tools_json            TEXT NOT NULL DEFAULT '[]',
+            secret_ref                      TEXT,
+            supported_action_contexts_json  TEXT NOT NULL DEFAULT '[]',
+            created_at                      TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at                      TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (company_id, server_id),
+            FOREIGN KEY (company_id) REFERENCES companies(company_id) ON DELETE CASCADE
+        );
+    """)
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_downstream_mcps_company ON downstream_mcp_servers(company_id);"
+    )
+
+    # Drop triggers on deprecated execution tables and drop tables if they exist
+    cursor.execute("DROP TRIGGER IF EXISTS trg_prevent_execution_events_update;")
+    cursor.execute("DROP TRIGGER IF EXISTS trg_prevent_execution_events_delete;")
+    cursor.execute("DROP TABLE IF EXISTS execution_events;")
+    cursor.execute("DROP TABLE IF EXISTS execution_runs;")
+
+
 def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
     """Initializes the database schema with constraints, indexes, and immutability triggers."""
     with db_session(db_path) as conn, conn:
         conn.executescript(SCHEMA_SQL)
         _migrate_columns_if_needed(conn)
+        _run_migration_v2(conn)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS schema_migrations (
                 version     INTEGER PRIMARY KEY,
@@ -343,6 +342,10 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
         if applied is None or applied < 1:
             conn.execute(
                 "INSERT OR IGNORE INTO schema_migrations (version, name) VALUES (1, 'initial_schema_and_json_columns');"
+            )
+        if applied is None or applied < 2:
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version, name) VALUES (2, 'add_downstream_mcps_and_deprecate_execution_runs');"
             )
 
 
@@ -363,7 +366,11 @@ def run_migrations(db_path: str | Path = DEFAULT_DB_PATH) -> int:
         )
         if applied < 1:
             conn.execute(
-                "INSERT INTO schema_migrations (version, name) VALUES (1, 'initial_schema_and_json_columns');"
+                "INSERT OR IGNORE INTO schema_migrations (version, name) VALUES (1, 'initial_schema_and_json_columns');"
             )
-            return 1
+        if applied < 2:
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version, name) VALUES (2, 'add_downstream_mcps_and_deprecate_execution_runs');"
+            )
+            return 2
         return applied

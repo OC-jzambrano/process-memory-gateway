@@ -14,9 +14,10 @@ from src.config import (
     COGNITO_RESOURCE_SERVER_IDENTIFIER,
     COGNITO_USER_POOL_ID,
 )
-from src.models.enums import CompanyStatus, MembershipStatus
+from src.models.enums import CompanyStatus, MembershipStatus, RoleType
 from src.models.schemas import RequestContext
 from src.storage.base_repository import BaseRepository
+from src.utils.privacy import sanitize_evidence
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,19 @@ class AuthenticationError(Exception):
 
 class AuthorizationError(Exception):
     """Raised when the authenticated user is not authorized for the requested company or action."""
+
+
+class AuthContextResolver:
+    """Helper to enforce role requirements on RequestContext."""
+
+    def __init__(self, repo: BaseRepository | None = None):
+        self.repo = repo
+
+    def require_role(self, ctx: RequestContext, allowed_roles: list[RoleType]) -> None:
+        if ctx.role not in allowed_roles:
+            raise AuthorizationError(
+                f"Role '{ctx.role.value}' is not authorized for this operation. Required: {[r.value for r in allowed_roles]}"
+            )
 
 
 class CognitoTokenVerifier:
@@ -88,7 +102,11 @@ class CognitoTokenVerifier:
                 self._jwks_cache_time = now
                 return self._jwks_cache
         except Exception as e:
-            logger.error("Failed to fetch Cognito JWKS from %s: %s", jwks_url, str(e))
+            logger.error(
+                "Failed to fetch Cognito JWKS from %s: %s",
+                jwks_url,
+                sanitize_evidence(str(e)),
+            )
             raise AuthenticationError(
                 f"Failed to fetch public signing keys: {e!s}"
             ) from e
@@ -154,11 +172,30 @@ class CognitoTokenVerifier:
                 f"Invalid token_use: expected 'access', got '{claims.get('token_use')}'."
             )
 
-        # 3. Validate Client ID
+        # 3. Validate Audience / Client ID
+        token_aud = claims.get("aud")
         token_client_id = claims.get("client_id")
-        if self.app_client_id and token_client_id != self.app_client_id:
+
+        if token_aud is not None:
+            valid_audiences = {
+                a for a in (self.app_client_id, self.resource_identifier) if a
+            }
+            aud_list = (
+                [token_aud] if isinstance(token_aud, str) else list(token_aud)
+            )
+            if not any(a in valid_audiences for a in aud_list):
+                raise AuthenticationError(
+                    f"Token audience mismatch: expected one of {sorted(valid_audiences)}, got '{token_aud}'."
+                )
+
+        if self.app_client_id and token_client_id:
+            if token_client_id != self.app_client_id:
+                raise AuthenticationError(
+                    f"Token client_id mismatch: expected '{self.app_client_id}', got '{token_client_id}'."
+                )
+        elif not token_aud and not token_client_id:
             raise AuthenticationError(
-                f"Token client_id mismatch: expected '{self.app_client_id}', got '{token_client_id}'."
+                "Token missing both 'aud' and 'client_id' claims."
             )
 
         # 4. Validate Scope

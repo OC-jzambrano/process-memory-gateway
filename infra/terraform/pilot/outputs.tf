@@ -42,3 +42,9 @@ output "mcp_endpoint_url" {
   value       = "https://${var.domain_name}/companies/${var.company_slug}/mcp"
   description = "Hosted Streamable HTTP MCP endpoint URL"
 }
+
+output "ecr_repository_url" {
+  value       = aws_ecr_repository.app.repository_url
+  description = "Amazon ECR Repository URL"
+}
+
