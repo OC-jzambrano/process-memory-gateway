@@ -47,14 +47,14 @@ resource "aws_cognito_user_pool_client" "mcp_client" {
   generate_secret                      = false
   allowed_oauth_flows                  = ["code"]
   allowed_oauth_flows_user_pool_client = true
-  allowed_oauth_scopes                 = [
+  allowed_oauth_scopes = [
     "openid",
     "email",
     "${aws_cognito_resource_server.mcp.identifier}/mcp:tools"
   ]
-  supported_identity_providers         = ["COGNITO"]
-  callback_urls                        = var.approved_callback_urls
-  logout_urls                          = ["http://localhost:3000/logout"]
+  supported_identity_providers = ["COGNITO"]
+  callback_urls                = var.approved_callback_urls
+  logout_urls                  = ["http://localhost:3000/logout"]
 
   token_validity_units {
     access_token  = "hours"

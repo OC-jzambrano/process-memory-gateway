@@ -10,18 +10,18 @@ resource "aws_ebs_volume" "memory_data" {
   }
 
   tags = {
-    Name        = "odoo-process-memory-${var.environment}-ebs-data"
-    Purpose     = "Persistent SQLite database storage"
+    Name    = "odoo-process-memory-${var.environment}-ebs-data"
+    Purpose = "Persistent SQLite database storage"
   }
 }
 
 # Single t3.small EC2 Host
 resource "aws_instance" "mcp_host" {
-  ami                  = data.aws_ami.ubuntu.id
-  instance_type        = var.ec2_instance_type
-  subnet_id            = aws_subnet.public.id
+  ami                    = data.aws_ami.ubuntu.id
+  instance_type          = var.ec2_instance_type
+  subnet_id              = aws_subnet.public.id
   vpc_security_group_ids = [aws_security_group.mcp_host.id]
-  iam_instance_profile = aws_iam_instance_profile.ec2_profile.name
+  iam_instance_profile   = aws_iam_instance_profile.ec2_profile.name
 
   root_block_device {
     volume_size           = 12

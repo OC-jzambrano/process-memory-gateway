@@ -7,8 +7,8 @@ resource "aws_s3_bucket" "backups" {
   }
 
   tags = {
-    Name        = "odoo-process-memory-backups-${var.environment}"
-    Purpose     = "Encrypted SQLite online backups"
+    Name    = "odoo-process-memory-backups-${var.environment}"
+    Purpose = "Encrypted SQLite online backups"
   }
 }
 
@@ -43,6 +43,8 @@ resource "aws_s3_bucket_lifecycle_configuration" "backup_lifecycle" {
   rule {
     id     = "retention-policy"
     status = "Enabled"
+
+    filter {}
 
     # Retain noncurrent versions for 7 days (hourly point-in-time recovery)
     noncurrent_version_expiration {

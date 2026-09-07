@@ -61,7 +61,7 @@ variable "ebs_volume_size_gb" {
 variable "approved_callback_urls" {
   type        = list(string)
   description = "Approved OAuth 2.0 redirect callback URLs"
-  default     = [
+  default = [
     "http://localhost:3000/callback",
     "https://oauth.pstmn.io/v1/callback"
   ]
