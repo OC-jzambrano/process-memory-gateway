@@ -93,3 +93,9 @@ ALLOW_LIVE_ODOO_WRITES = os.getenv("ALLOW_LIVE_ODOO_WRITES", "false").lower() in
     "1",
     "yes",
 )
+PILOT_AUTO_ENROLL = os.getenv("PILOT_AUTO_ENROLL", "false").lower() in (
+    "true",
+    "1",
+    "yes",
+)
+

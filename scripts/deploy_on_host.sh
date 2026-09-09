@@ -76,7 +76,7 @@ touch .env
 cp .env .env.bak
 
 # 5. Write .env
-grep -v '^MCP_IMAGE=' .env.bak | grep -v '^COGNITO_' > .env || true
+grep -v '^MCP_IMAGE=' .env.bak | grep -v '^COGNITO_' | grep -v '^PILOT_AUTO_ENROLL=' > .env || true
 cat << EOF >> .env
 MCP_IMAGE=$IMAGE_DIGEST
 DOMAIN_NAME=51.20.246.78
@@ -84,6 +84,7 @@ COGNITO_DOMAIN=odoo-pm-pilot-354298.auth.eu-north-1.amazoncognito.com
 COGNITO_USER_POOL_ID=eu-north-1_0CeSG3jfV
 COGNITO_APP_CLIENT_ID=30bv65eumkbqei9l7p31q9ctvj
 COGNITO_RESOURCE_SERVER_IDENTIFIER=https://mcp.example.com
+PILOT_AUTO_ENROLL=true
 EOF
 
 # 6. Restart containers
@@ -112,6 +113,10 @@ if [ "$READY" -ne 1 ]; then
   docker compose up -d
   exit 1
 fi
+
+# 8. Seed default pilot tenants if needed
+docker exec mcp-server python -m src.cli.bootstrap --company odooconcept --name "Odoo Concept" --owner jzambrano --email jzambrano@odooconcept.com || true
+docker exec mcp-server python -m src.cli.bootstrap --company odooconcept_demo --name "Odoo Concept Demo" --owner jzambrano --email jzambrano@odooconcept.com || true
 
 rm -f .env.bak
 echo "Deployment of $IMAGE_DIGEST completed successfully."

@@ -13,9 +13,10 @@ from src.config import (
     COGNITO_REQUIRED_SCOPE,
     COGNITO_RESOURCE_SERVER_IDENTIFIER,
     COGNITO_USER_POOL_ID,
+    PILOT_AUTO_ENROLL,
 )
 from src.models.enums import CompanyStatus, MembershipStatus, RoleType
-from src.models.schemas import RequestContext
+from src.models.schemas import Company, Membership, RequestContext, User
 from src.storage.base_repository import BaseRepository
 from src.utils.privacy import sanitize_evidence
 
@@ -228,6 +229,15 @@ def resolve_authenticated_context(
     """
     # 1. Resolve Company
     company = repo.get_company_by_slug(company_slug)
+    if not company and PILOT_AUTO_ENROLL and company_slug in ("odooconcept", "odooconcept_demo"):
+        company = repo.upsert_company(
+            Company(
+                company_id=company_slug,
+                company_slug=company_slug,
+                name="Odoo Concept" if company_slug == "odooconcept" else "Odoo Concept Demo",
+                status=CompanyStatus.ACTIVE,
+            )
+        )
     if not company:
         raise AuthorizationError(f"Company '{company_slug}' not found.")
     if company.status != CompanyStatus.ACTIVE:
@@ -245,6 +255,19 @@ def resolve_authenticated_context(
     if not user and sub:
         user = repo.get_user(sub)
 
+    if not user and PILOT_AUTO_ENROLL:
+        uid = username or sub or "pilot_owner"
+        email = claims.get("email") or (username if "@" in str(username) else f"{uid}@odooconcept.com")
+        user = repo.upsert_user(
+            User(
+                user_id=uid,
+                email=email,
+                name=uid,
+                cognito_sub=sub,
+                status="active",
+            )
+        )
+
     if not user:
         raise AuthorizationError(
             "Authenticated user account is not provisioned in Process Memory."
@@ -256,6 +279,17 @@ def resolve_authenticated_context(
 
     # 3. Resolve Membership
     membership = repo.get_membership(company.company_id, user.user_id)
+    if not membership and PILOT_AUTO_ENROLL:
+        membership = repo.upsert_membership(
+            Membership(
+                membership_id=f"mem_{company.company_id}_{user.user_id}",
+                company_id=company.company_id,
+                user_id=user.user_id,
+                role=RoleType.OWNER,
+                status=MembershipStatus.ACTIVE,
+            )
+        )
+
     if not membership:
         raise AuthorizationError(
             f"User '{user.user_id}' is not a member of company '{company_slug}'."
