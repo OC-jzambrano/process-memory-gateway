@@ -93,7 +93,7 @@ jobs:
           CMD_ID=$(aws ssm send-command \
             --instance-ids "$INSTANCE_ID" \
             --document-name "AWS-RunShellScript" \
-            --comment "Deploy image $IMAGE_DIGEST" \
+            --comment "Deploy image ${GITHUB_SHA:0:7}" \
             --parameters commands="[
               \"mkdir -p /opt/process-memory\",
               \"echo '$COMPOSE_B64' | base64 -d > /opt/process-memory/docker-compose.yml\",
