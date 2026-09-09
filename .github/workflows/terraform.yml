@@ -77,7 +77,7 @@ jobs:
         run: |
           echo "=== Initializing Pilot Terraform ==="
           cd infra/terraform/pilot
-          terraform init -backend-config="bucket=odoo-process-memory-tfstate-$ACCOUNT_ID"
+          terraform init -backend-config="bucket=odoo-process-memory-tfstate-$ACCOUNT_ID" -reconfigure
           ACTION="${{ github.event.inputs.action }}"
           if [ -z "$ACTION" ]; then ACTION="apply"; fi
           
