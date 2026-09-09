@@ -1,4 +1,4 @@
-{$DOMAIN_NAME:localhost} {
+http://51.20.246.78 {
     encode gzip zstd
 
     log {
@@ -8,7 +8,6 @@
 
     # Security headers
     header {
-        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
         X-Content-Type-Options "nosniff"
         X-Frame-Options "DENY"
         Referrer-Policy "strict-origin-when-cross-origin"
