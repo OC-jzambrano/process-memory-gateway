@@ -4,27 +4,32 @@ set -euxo pipefail
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:$PATH"
 
 IMAGE_DIGEST="${1:-}"
+ECR_TOKEN="${2:-}"
+
 if [ -z "$IMAGE_DIGEST" ]; then
   echo "Error: IMAGE_DIGEST parameter is required."
   exit 1
 fi
 
-# 1. Wait for cloud-init or install docker if missing
-if command -v cloud-init >/dev/null 2>&1; then
-  echo "Waiting for cloud-init..."
-  cloud-init status --wait || true
-fi
-
+# 1. Install Docker & tools if not present
 if ! command -v docker >/dev/null 2>&1; then
-  echo "Docker not yet installed by cloud-init, installing now..."
+  echo "Installing Docker..."
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -y
-  apt-get install -y docker.io docker-compose-v2 awscli curl jq
+  apt-get install -y docker.io docker-compose-v2 curl jq unzip
   systemctl enable --now docker
 fi
 
-# Ensure docker daemon is running
 systemctl is-active --quiet docker || systemctl start docker
+
+# Ensure AWS CLI v2 is available for S3 backups
+if ! command -v aws >/dev/null 2>&1; then
+  echo "Installing AWS CLI v2..."
+  curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "/tmp/awscliv2.zip"
+  unzip -qo /tmp/awscliv2.zip -d /tmp
+  /tmp/aws/install --update || /tmp/aws/install
+  rm -rf /tmp/aws /tmp/awscliv2.zip
+fi
 
 # 2. Mount persistent EBS volume
 DATA_MOUNT="/mnt/process-memory-data"
@@ -55,17 +60,22 @@ cd "$APP_DIR"
 
 # 3. Authenticate Docker with Amazon ECR
 REGISTRY=$(echo "$IMAGE_DIGEST" | cut -d'/' -f1)
-REGION="eu-north-1"
-echo "Logging in to Amazon ECR: $REGISTRY..."
-aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$REGISTRY"
+if [ -n "$ECR_TOKEN" ]; then
+  echo "Logging into Amazon ECR via passed token..."
+  echo "$ECR_TOKEN" | docker login --username AWS --password-stdin "$REGISTRY"
+else
+  REGION="eu-north-1"
+  echo "Logging into Amazon ECR via AWS CLI..."
+  aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$REGISTRY"
+fi
 
-# 4. Pull the new container image
+# 4. Pull image
 docker pull "$IMAGE_DIGEST"
 
 touch .env
 cp .env .env.bak
 
-# 5. Update configuration environment
+# 5. Write .env
 grep -v '^MCP_IMAGE=' .env.bak | grep -v '^COGNITO_' > .env || true
 cat << EOF >> .env
 MCP_IMAGE=$IMAGE_DIGEST
@@ -75,7 +85,7 @@ COGNITO_APP_CLIENT_ID=30bv65eumkbqei9l7p31q9ctvj
 COGNITO_RESOURCE_SERVER_IDENTIFIER=https://mcp.example.com
 EOF
 
-# 6. Restart application containers
+# 6. Restart containers
 docker compose down || true
 docker compose up -d
 
