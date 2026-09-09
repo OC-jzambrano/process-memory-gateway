@@ -86,27 +86,38 @@ jobs:
           INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
           IMAGE_DIGEST: ${{ steps.build-image.outputs.image_digest }}
         run: |
-          aws ssm send-command \
+          COMPOSE_B64=$(base64 -w 0 docker-compose.yml)
+          CADDY_B64=$(base64 -w 0 Caddyfile)
+          DEPLOY_SCRIPT_B64=$(base64 -w 0 scripts/deploy_on_host.sh)
+
+          CMD_ID=$(aws ssm send-command \
             --instance-ids "$INSTANCE_ID" \
             --document-name "AWS-RunShellScript" \
-            --comment "Deploy image $IMAGE_TAG" \
-            --parameters commands='[
-              "set -e",
-              "mountpoint -q /mnt/process-memory-data || (echo \"FATAL: Persistent volume /mnt/process-memory-data is not mounted!\" && exit 1)",
-              "cd /opt/process-memory",
-              "docker exec mcp-server python scripts/backup_sqlite.py || true",
-              "docker pull '"$IMAGE_DIGEST"'",
-              "touch .env",
-              "cp .env .env.bak",
-              "grep -v ^MCP_IMAGE= .env.bak > .env || true",
-              "echo \"MCP_IMAGE='"$IMAGE_DIGEST"'\" >> .env",
-              "docker compose up -d",
-              "if ! curl -fsS --retry 5 --retry-delay 3 http://localhost:8000/health/ready; then",
-              "  echo \"Health check failed, rolling back to previous image configuration!\"",
-              "  mv .env.bak .env",
-              "  docker compose up -d",
-              "  exit 1",
-              "fi",
-              "rm -f .env.bak",
-              "echo \"Deployment of '"$IMAGE_DIGEST"' completed successfully.\""
-            ]'
+            --comment "Deploy image $IMAGE_DIGEST" \
+            --parameters commands="[
+              \"mkdir -p /opt/process-memory\",
+              \"echo '$COMPOSE_B64' | base64 -d > /opt/process-memory/docker-compose.yml\",
+              \"echo '$CADDY_B64' | base64 -d > /opt/process-memory/Caddyfile\",
+              \"echo '$DEPLOY_SCRIPT_B64' | base64 -d > /opt/process-memory/deploy_on_host.sh\",
+              \"chmod +x /opt/process-memory/deploy_on_host.sh\",
+              \"/opt/process-memory/deploy_on_host.sh '$IMAGE_DIGEST'\"
+            ]" \
+            --query "Command.CommandId" --output text)
+
+          echo "Sent SSM deployment command ID: $CMD_ID"
+          echo "Waiting for command completion on EC2 host..."
+          aws ssm wait command-executed --command-id "$CMD_ID" --instance-id "$INSTANCE_ID"
+
+          STATUS=$(aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" --query "Status" --output text)
+          OUTPUT=$(aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" --query "StandardOutputContent" --output text)
+          ERR_MSG=$(aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" --query "StandardErrorContent" --output text)
+
+          echo "=== SSM Command Output ==="
+          echo "$OUTPUT"
+
+          if [ "$STATUS" != "Success" ]; then
+            echo "=== SSM Command Error ==="
+            echo "$ERR_MSG"
+            exit 1
+          fi
+          echo "SSM Deployment verified successfully!"
