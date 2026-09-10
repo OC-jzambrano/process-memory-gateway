@@ -1,4 +1,4 @@
-http://51.20.246.78 {
+:80 {
     encode gzip zstd
 
     log {
