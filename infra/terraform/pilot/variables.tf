@@ -63,7 +63,8 @@ variable "approved_callback_urls" {
   description = "Approved OAuth 2.0 redirect callback URLs"
   default = [
     "http://localhost:3000/callback",
-    "http://127.0.0.1/callback/AvYszWqvA9eg",
+    # Codex must use the same fixed listener port; Cognito matches the full URI.
+    "http://127.0.0.1:8765/callback/AvYszWqvA9eg",
     "https://oauth.pstmn.io/v1/callback"
   ]
 }
