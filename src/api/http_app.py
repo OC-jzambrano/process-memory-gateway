@@ -146,6 +146,26 @@ async def oauth_discovery(request: Request) -> JSONResponse:
     return JSONResponse(metadata)
 
 
+async def oauth_protected_resource(request: Request) -> JSONResponse:
+    """RFC 9728 metadata describing the protected MCP resource."""
+    host_domain = request.headers.get("host", DOMAIN_NAME or "localhost")
+    resource = f"https://{host_domain}"
+    if COGNITO_USER_POOL_ID:
+        authorization_server = (
+            f"https://cognito-idp.{COGNITO_REGION}.amazonaws.com/"
+            f"{COGNITO_USER_POOL_ID}"
+        )
+    else:
+        authorization_server = resource
+    return JSONResponse(
+        {
+            "resource": resource,
+            "authorization_servers": [authorization_server],
+            "scopes_supported": ["openid", "email", COGNITO_REQUIRED_SCOPE],
+        }
+    )
+
+
 class CompanyMCPHandler:
     """
     Direct ASGI delegation endpoint for /companies/{company_slug}/mcp.
@@ -246,6 +266,11 @@ def create_app() -> Starlette:
             Route(
                 "/.well-known/oauth-authorization-server",
                 oauth_discovery,
+                methods=["GET"],
+            ),
+            Route(
+                "/.well-known/oauth-protected-resource",
+                oauth_protected_resource,
                 methods=["GET"],
             ),
             Route(

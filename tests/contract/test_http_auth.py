@@ -182,6 +182,16 @@ def test_oauth_discovery_metadata(auth_setup):
     assert "mcp:tools" in data["scopes_supported"]
 
 
+def test_oauth_protected_resource_metadata(auth_setup):
+    client = auth_setup["client"]
+    res = client.get("/.well-known/oauth-protected-resource")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["resource"].startswith("https://")
+    assert data["authorization_servers"]
+    assert "mcp:tools" in data["scopes_supported"]
+
+
 def test_request_missing_token_returns_401(auth_setup):
     client = auth_setup["client"]
     res = client.post("/companies/company_a/mcp", json={})
