@@ -39,12 +39,16 @@ output "cognito_discovery_url" {
 }
 
 output "mcp_endpoint_url" {
-  value       = "https://${var.domain_name}/companies/${var.company_slug}/mcp"
-  description = "Hosted Streamable HTTP MCP endpoint URL"
+  value       = "${aws_apigatewayv2_api.mcp.api_endpoint}/companies/${var.company_slug}/mcp"
+  description = "HTTPS Streamable HTTP MCP endpoint URL through API Gateway"
+}
+
+output "api_gateway_endpoint" {
+  value       = aws_apigatewayv2_api.mcp.api_endpoint
+  description = "Default HTTPS API Gateway endpoint"
 }
 
 output "ecr_repository_url" {
   value       = aws_ecr_repository.app.repository_url
   description = "Amazon ECR Repository URL"
 }
-
