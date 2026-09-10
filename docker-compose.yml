@@ -5,7 +5,6 @@ services:
     restart: unless-stopped
     environment:
       - DOMAIN_NAME=${DOMAIN_NAME:-localhost}
-      - MCP_RESOURCE_URL=${MCP_RESOURCE_URL:-}
     ports:
       - "80:80"
       - "443:443"
@@ -29,6 +28,7 @@ services:
       - ENVIRONMENT=production
       - HOSTED_MODE=true
       - DOMAIN_NAME=${DOMAIN_NAME:-localhost}
+      - MCP_RESOURCE_URL=${MCP_RESOURCE_URL:-}
       - PROCESS_MEMORY_DATA_DIR=/mnt/data
       - PROCESS_MEMORY_DB_PATH=/mnt/data/process_memory.db
       - AWS_REGION=${AWS_REGION:-eu-north-1}
