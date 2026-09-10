@@ -145,6 +145,7 @@ def make_token(
     scope="openid email mcp:tools",
     exp_offset=3600,
     kid="test-key-1",
+    aud=None,
 ) -> str:
     now = int(time.time())
     payload = {
@@ -157,7 +158,34 @@ def make_token(
         "iat": now,
         "exp": now + exp_offset,
     }
+    if aud is not None:
+        payload["aud"] = aud
     return jwt.encode(payload, private_key, algorithm="RS256", headers={"kid": kid})
+
+
+@pytest.mark.parametrize(
+    "audience,client_id,accepted",
+    [
+        ("https://public.example/companies/company_a/mcp", "test-client-id", True),
+        ("https://other.example/mcp", "test-client-id", False),
+        ("https://public.example/companies/company_b/mcp", "test-client-id", False),
+        ("https://public.example/companies/company_a/mcp", "other-client", False),
+    ],
+)
+def test_resource_bound_signed_token(auth_setup, monkeypatch, audience, client_id, accepted):
+    from src.api.auth import AuthenticationError
+
+    monkeypatch.setattr(
+        token_verifier,
+        "protected_resource_url",
+        "https://public.example/companies/company_a/mcp",
+    )
+    token = make_token(auth_setup["private_key"], aud=audience, client_id=client_id)
+    if accepted:
+        assert token_verifier.verify_token(token)["aud"] == audience
+    else:
+        with pytest.raises(AuthenticationError):
+            token_verifier.verify_token(token)
 
 
 def test_health_endpoints(auth_setup):

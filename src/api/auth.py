@@ -13,6 +13,7 @@ from src.config import (
     COGNITO_REQUIRED_SCOPE,
     COGNITO_RESOURCE_SERVER_IDENTIFIER,
     COGNITO_USER_POOL_ID,
+    MCP_RESOURCE_URL,
     PILOT_AUTO_ENROLL,
 )
 from src.models.enums import CompanyStatus, MembershipStatus, RoleType
@@ -63,6 +64,7 @@ class CognitoTokenVerifier:
         resource_identifier: str | None = None,
         required_scope: str | None = None,
         jwks_override: dict[str, Any] | None = None,
+        protected_resource_url: str | None = None,
     ):
         self.user_pool_id = user_pool_id or COGNITO_USER_POOL_ID
         self.region = region or COGNITO_REGION
@@ -71,6 +73,9 @@ class CognitoTokenVerifier:
             resource_identifier or COGNITO_RESOURCE_SERVER_IDENTIFIER
         )
         self.required_scope = required_scope or COGNITO_REQUIRED_SCOPE
+        self.protected_resource_url = (
+            MCP_RESOURCE_URL if protected_resource_url is None else protected_resource_url
+        )
         self.expected_issuer = (
             f"https://cognito-idp.{self.region}.amazonaws.com/{self.user_pool_id}"
             if self.user_pool_id
@@ -179,7 +184,13 @@ class CognitoTokenVerifier:
 
         if token_aud is not None:
             valid_audiences = {
-                a for a in (self.app_client_id, self.resource_identifier) if a
+                a
+                for a in (
+                    self.app_client_id,
+                    self.resource_identifier,
+                    self.protected_resource_url,
+                )
+                if a
             }
             aud_list = (
                 [token_aud] if isinstance(token_aud, str) else list(token_aud)
