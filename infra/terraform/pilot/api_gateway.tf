@@ -10,7 +10,7 @@ resource "aws_apigatewayv2_integration" "mcp_ec2" {
   api_id                 = aws_apigatewayv2_api.mcp.id
   integration_type       = "HTTP_PROXY"
   integration_method     = "ANY"
-  integration_uri        = "http://${aws_eip.mcp_eip.public_ip}"
+  integration_uri        = "http://${aws_eip.mcp_eip.public_ip}/{proxy}"
   payload_format_version = "1.0"
   timeout_milliseconds   = 29000
 
