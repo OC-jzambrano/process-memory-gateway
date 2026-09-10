@@ -16,7 +16,7 @@ resource "aws_apigatewayv2_integration" "mcp_ec2" {
 
   request_parameters = {
     "overwrite:header.Host" = aws_eip.mcp_eip.public_ip
-    "overwrite:header.X-Forwarded-Host" = "$context.domainName"
+    "overwrite:header.X-OPM-Public-Host" = "$context.domainName"
   }
 }
 
