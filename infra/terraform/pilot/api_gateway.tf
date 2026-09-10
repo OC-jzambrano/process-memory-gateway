@@ -15,7 +15,7 @@ resource "aws_apigatewayv2_integration" "mcp_ec2" {
   timeout_milliseconds   = 29000
 
   request_parameters = {
-    "overwrite:header.Host" = aws_eip.mcp_eip.public_ip
+    "overwrite:header.Host"              = aws_eip.mcp_eip.public_ip
     "overwrite:header.X-OPM-Public-Host" = "$context.domainName"
   }
 }
