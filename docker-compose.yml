@@ -5,6 +5,7 @@ services:
     restart: unless-stopped
     environment:
       - DOMAIN_NAME=${DOMAIN_NAME:-localhost}
+      - MCP_RESOURCE_URL=${MCP_RESOURCE_URL:-}
     ports:
       - "80:80"
       - "443:443"

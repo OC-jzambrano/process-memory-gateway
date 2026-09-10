@@ -80,6 +80,7 @@ grep -v '^MCP_IMAGE=' .env.bak | grep -v '^COGNITO_' | grep -v '^PILOT_AUTO_ENRO
 cat << EOF >> .env
 MCP_IMAGE=$IMAGE_DIGEST
 DOMAIN_NAME=51.20.246.78
+MCP_RESOURCE_URL=https://sjbs8r4vg0.execute-api.eu-north-1.amazonaws.com/companies/odooconcept_demo/mcp
 COGNITO_DOMAIN=odoo-pm-pilot-354298.auth.eu-north-1.amazoncognito.com
 COGNITO_USER_POOL_ID=eu-north-1_0CeSG3jfV
 COGNITO_APP_CLIENT_ID=30bv65eumkbqei9l7p31q9ctvj

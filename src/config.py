@@ -74,6 +74,7 @@ COGNITO_DOMAIN = os.getenv("COGNITO_DOMAIN", "")
 
 # Domain & Transport Security Settings
 DOMAIN_NAME = os.getenv("DOMAIN_NAME", "localhost")
+MCP_RESOURCE_URL = os.getenv("MCP_RESOURCE_URL", "")
 _raw_allowed_hosts = os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1,testserver")
 ALLOWED_HOSTS = [h.strip() for h in _raw_allowed_hosts.split(",") if h.strip()]
 if DOMAIN_NAME and DOMAIN_NAME not in ALLOWED_HOSTS:
@@ -98,4 +99,3 @@ PILOT_AUTO_ENROLL = os.getenv("PILOT_AUTO_ENROLL", "false").lower() in (
     "1",
     "yes",
 )
-

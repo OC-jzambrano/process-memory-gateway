@@ -21,6 +21,7 @@ from src.config import (
     COGNITO_USER_POOL_ID,
     DATA_DIR,
     DOMAIN_NAME,
+    MCP_RESOURCE_URL,
 )
 from src.storage.db import get_connection
 from src.storage.repository import MemoryRepository
@@ -155,7 +156,7 @@ async def oauth_protected_resource(request: Request) -> JSONResponse:
         request.headers.get("host", DOMAIN_NAME or "localhost"),
         ),
     )
-    resource = f"https://{host_domain}"
+    resource = MCP_RESOURCE_URL or f"https://{host_domain}"
     if COGNITO_USER_POOL_ID:
         authorization_server = (
             f"https://cognito-idp.{COGNITO_REGION}.amazonaws.com/"
