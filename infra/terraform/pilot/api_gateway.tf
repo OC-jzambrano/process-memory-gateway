@@ -12,7 +12,7 @@ resource "aws_apigatewayv2_integration" "mcp_ec2" {
   integration_method     = "ANY"
   integration_uri        = "http://${aws_eip.mcp_eip.public_ip}"
   payload_format_version = "1.0"
-  timeout_milliseconds    = 29000
+  timeout_milliseconds   = 29000
 
   request_parameters = {
     "overwrite:header.Host" = aws_eip.mcp_eip.public_ip
