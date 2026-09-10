@@ -191,6 +191,12 @@ def test_oauth_protected_resource_metadata(auth_setup):
     assert data["authorization_servers"]
     assert "mcp:tools" in data["scopes_supported"]
 
+    forwarded = client.get(
+        "/.well-known/oauth-protected-resource",
+        headers={"x-forwarded-host": "public.example.com"},
+    )
+    assert forwarded.json()["resource"] == "https://public.example.com"
+
 
 def test_request_missing_token_returns_401(auth_setup):
     client = auth_setup["client"]

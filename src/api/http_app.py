@@ -148,7 +148,10 @@ async def oauth_discovery(request: Request) -> JSONResponse:
 
 async def oauth_protected_resource(request: Request) -> JSONResponse:
     """RFC 9728 metadata describing the protected MCP resource."""
-    host_domain = request.headers.get("host", DOMAIN_NAME or "localhost")
+    host_domain = request.headers.get(
+        "x-forwarded-host",
+        request.headers.get("host", DOMAIN_NAME or "localhost"),
+    )
     resource = f"https://{host_domain}"
     if COGNITO_USER_POOL_ID:
         authorization_server = (
