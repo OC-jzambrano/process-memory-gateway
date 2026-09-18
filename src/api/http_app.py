@@ -1,4 +1,5 @@
 import contextlib
+import json
 import logging
 
 from starlette.applications import Starlette
@@ -15,6 +16,7 @@ from src.api.auth import (
 )
 from src.api.auth_context import set_current_context
 from src.config import (
+    AWS_REGION,
     COGNITO_DOMAIN,
     COGNITO_REGION,
     COGNITO_REQUIRED_SCOPE,
@@ -115,10 +117,10 @@ async def health_ready(request: Request) -> JSONResponse:
 
 DOWNSTREAM_UI = """<!doctype html><html><head><meta charset='utf-8'><title>OPM Downstreams</title>
 <style>body{font:15px system-ui;max-width:900px;margin:40px auto;padding:0 20px;color:#18212b}input,select,button{padding:10px;margin:5px 0;width:100%;box-sizing:border-box}button{cursor:pointer;background:#1769aa;color:white;border:0}.row{display:grid;grid-template-columns:1fr 1fr;gap:16px}.server{border:1px solid #ccd5df;padding:14px;margin:12px 0;border-radius:6px}.ready{color:#087f3f}.bad{color:#b42318}</style></head>
-<body><h1>OPM downstreams</h1><p>Register a downstream by secret reference. Credentials are never stored in OPM.</p>
-<form id='form'><div class='row'><label>Server ID<input name='server_id' required placeholder='odoo-main'></label><label>Transport<select name='transport'><option value='odoo_xmlrpc'>Odoo XML-RPC</option><option value='streamable_http'>Streamable HTTP</option><option value='stdio'>stdio</option></select></label></div>
-<label>Endpoint<input name='endpoint' required placeholder='https://example.com'></label><label>Secrets Manager ARN<input name='secret_ref' required placeholder='arn:aws:secretsmanager:...'></label><button>Register and connect</button></form><section id='servers'></section>
-<script>const f=document.querySelector('#form'),out=document.querySelector('#servers');async function load(){let r=await fetch('/admin/downstreams/status',{headers:{Authorization:localStorage.opmBearer||''}});out.innerHTML=await r.text()}f.onsubmit=async e=>{e.preventDefault();let x=Object.fromEntries(new FormData(f));let r=await fetch('/admin/downstreams/register',{method:'POST',headers:{'Content-Type':'application/json',Authorization:localStorage.opmBearer||''},body:JSON.stringify(x)});alert(await r.text());load()};load()</script></body></html>"""
+<body><h1>OPM downstreams</h1><p>For Odoo, enter connection details. OPM stores them in Secrets Manager and keeps only the secret reference.</p>
+<form id='form'><div class='row'><label>Server ID<input name='server_id' required placeholder='odoo-main'></label><label>Transport<select name='transport' id='transport'><option value='odoo_xmlrpc'>Odoo XML-RPC</option><option value='streamable_http'>Streamable HTTP</option><option value='stdio'>stdio</option></select></label></div>
+<label>Endpoint<input name='endpoint' required placeholder='https://community.odooconcept.com'></label><label>Odoo user<input name='username' placeholder='process-memory-pilot'></label><label>Odoo password or API key<input type='password' name='password'></label><label>Database (optional)<input name='database' placeholder='community'></label><label>Existing Secrets Manager ARN (generic MCP only)<input name='secret_ref' placeholder='arn:aws:secretsmanager:...'></label><button>Register and connect</button></form><section id='servers'></section>
+<script>const f=document.querySelector('#form'),out=document.querySelector('#servers');async function load(){let r=await fetch('/admin/downstreams/status'+location.search,{headers:{Authorization:localStorage.opmBearer||''}});out.innerHTML=r.ok?await r.text():'Authentication required: provide the agent Bearer token in localStorage.opmBearer'}f.onsubmit=async e=>{e.preventDefault();let x=Object.fromEntries(new FormData(f));let r=await fetch('/admin/downstreams/register'+location.search,{method:'POST',headers:{'Content-Type':'application/json',Authorization:localStorage.opmBearer||''},body:JSON.stringify(x)});alert(await r.text());load()};load()</script></body></html>"""
 
 
 async def downstream_ui(request: Request) -> HTMLResponse:
@@ -130,10 +132,34 @@ async def downstream_register(request: Request) -> JSONResponse:
     ctx = await _resolve_ui_context(request)
     set_current_context(ctx)
     try:
+        secret_ref = data.get("secret_ref")
+        if data.get("transport") == "odoo_xmlrpc" and data.get("username") and data.get("password"):
+            import boto3
+
+            secret_name = f"opm/downstream/{ctx.company_slug}/{data['server_id'].strip()}"
+            secret_value = {
+                "database": data.get("database", "").strip(),
+                "username": data["username"].strip(),
+                "password": data["password"],
+            }
+            secrets = boto3.client("secretsmanager", region_name=AWS_REGION)
+            try:
+                secret_ref = secrets.create_secret(
+                    Name=secret_name,
+                    SecretString=json.dumps(secret_value),
+                    Description="OPM downstream credentials",
+                )["ARN"]
+            except secrets.exceptions.ResourceExistsException:
+                secret_ref = secrets.update_secret(
+                    SecretId=secret_name,
+                    SecretString=json.dumps(secret_value),
+                )["ARN"]
+        if not secret_ref:
+            return JSONResponse({"error": "Provide Odoo credentials or an existing secret_ref."}, status_code=400)
         result = get_default_service().register_downstream_mcp(
             server_id=data["server_id"], endpoint=data["endpoint"],
             transport=data.get("transport", "streamable_http"),
-            secret_ref=data["secret_ref"], available_tools=data.get("available_tools"),
+            secret_ref=secret_ref, available_tools=data.get("available_tools"),
         )
         return JSONResponse(result.model_dump())
     finally:
