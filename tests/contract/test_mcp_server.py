@@ -372,7 +372,7 @@ async def test_protocol_dispatch_all_six_approved_tools():
             "remember_company_instruction",
             arguments={
                 "instruction_text": "Every task must have acceptance criteria.",
-                "context_hint": {"system": "odoo", "resource": "project.task"},
+                "context_hint": {"system": "odoo", "resource": "work.item"},
             },
         )
         assert res1.isError is not True
@@ -409,7 +409,7 @@ async def test_protocol_dispatch_all_six_approved_tools():
             arguments={
                 "system": "odoo",
                 "application": "project",
-                "resource": "project.task",
+                "resource": "work.item",
                 "operation": "create",
                 "fields": ["definition_of_done"],
             },
@@ -454,7 +454,7 @@ async def test_protocol_dispatch_all_six_approved_tools():
                 "user_request": "Create a task for bug fix",
                 "action_context": {
                     "system": "odoo",
-                    "resource": "project.task",
+                    "resource": "work.item",
                     "operation": "create",
                 },
             },
@@ -599,7 +599,7 @@ def clean_context(tmp_path, monkeypatch):
         return OrchestrationToolCall(
             server_id="test_server",
             tool_name="create_record",
-            arguments={"model": "project.task", "values": {"name": "Test record"}},
+            arguments={"model": "work.item", "values": {"name": "Test record"}},
         )
 
     svc.orchestrator = BedrockOrchestrator(mock_handler=mock_orchestrate)
@@ -633,7 +633,7 @@ def test_public_six_tools_lifecycle(clean_context):
     context_json = get_company_context(
         system="odoo",
         application="project",
-        resource="project.task",
+        resource="work.item",
         operation="create",
     )
     context_data = json.loads(context_json)
@@ -665,7 +665,7 @@ def test_public_six_tools_lifecycle(clean_context):
     # 6. run_downstream_request
     req_json = run_downstream_request(
         user_request="Create a task for bug fix",
-        action_context={"system": "odoo", "resource": "project.task", "operation": "create"},
+        action_context={"system": "odoo", "resource": "work.item", "operation": "create"},
     )
     req_data = json.loads(req_json)
     assert req_data["success"] is True

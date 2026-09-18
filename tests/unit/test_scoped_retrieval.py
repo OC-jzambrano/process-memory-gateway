@@ -55,7 +55,7 @@ def test_scoped_retrieval_excludes_unrelated_modules(repo):
                 structured_scope=ActionContext(
                     system="odoo",
                     application="project",
-                    resource="project.task",
+                    resource="work.item",
                     operation="create",
                 ),
             )
@@ -123,7 +123,7 @@ def test_scoped_retrieval_excludes_unrelated_modules(repo):
                 structured_scope=ActionContext(
                     system="odoo",
                     application="project",
-                    resource="project.task",
+                    resource="work.item",
                     operation="create",
                 ),
             ),
@@ -140,22 +140,22 @@ def test_scoped_retrieval_excludes_unrelated_modules(repo):
         "cand_task", decision="approve", reviewer="owner", client_id="co_retrieval"
     )
 
-    # 3. Retrieve Memory Pack specifically for project.task:create
+    # 3. Retrieve Memory Pack specifically for work.item:create
     pack = retriever.retrieve_pack(
         company_id="co_retrieval",
         company_slug="co_retrieval",
         system="odoo",
         application="project",
-        resource="project.task",
+        resource="work.item",
         operation="create",
     )
 
     assert len(pack.rules) >= 1
-    # Verify retrieved rules are project.task related
+    # Verify retrieved rules are work.item related
     rule_texts = [r.rule_text for r in pack.rules]
     assert any("acceptance criteria" in t.lower() for t in rule_texts)
     # Verify MRP and Sales are not exact scope matches
     exact_scoped = [
-        r for r in pack.rules if r.scope and r.scope.resource == "project.task"
+        r for r in pack.rules if r.scope and r.scope.resource == "work.item"
     ]
     assert len(exact_scoped) >= 1

@@ -27,7 +27,7 @@ class ActionContext(BaseModel):
     )
     resource: str | None = Field(
         default=None,
-        description="Target model/resource, e.g. 'project.task'.",
+        description="Target model/resource, e.g. 'work.item'.",
     )
     operation: str | None = Field(
         default=None,

@@ -229,68 +229,21 @@ class DownstreamDispatcher:
                 error=f"Protocol schema validation error: {sve}",
             )
 
-        # 4. Invoke Downstream Adapter
-        try:
-            transport = server.transport
-            if transport == MCPTransport.ODOO_XMLRPC:
-                connector = self._resolve_odoo_connector(server)
-                model = arguments.pop("model", None)
-                if not isinstance(model, str) or not model.strip():
-                    raise ValueError("Odoo XML-RPC create_record requires an explicit non-empty 'model' argument.")
-
-                values = arguments.pop("values", None)
-                if values is None:
-                    values = arguments
-                elif not isinstance(values, dict):
-                    raise ValueError("Odoo XML-RPC create_record 'values' argument must be an object.")
-
-                result = connector.create_record(model=model.strip(), values=values)
-                return OrchestrationResult(
-                    success=True,
-                    correlation_id=cid,
-                    server_id=server_id,
-                    tool_name=tool_name,
-                    result=result,
-                    metadata={"transport": "odoo_xmlrpc", "model": model},
-                )
-            elif transport == MCPTransport.INTERNAL_MOCK:
-                if self.mock_handler:
-                    result = self.mock_handler(server, tool_call)
-                else:
-                    result = {"id": 1001, "status": "mock_success", "received_arguments": sanitize_evidence(arguments)}
-                return OrchestrationResult(
-                    success=True,
-                    correlation_id=cid,
-                    server_id=server_id,
-                    tool_name=tool_name,
-                    result=result,
-                    metadata={"transport": "internal_mock"},
-                )
-            elif transport == MCPTransport.STREAMABLE_HTTP:
-                result = self._dispatch_streamable_http(server, tool_name, arguments)
-                return OrchestrationResult(
-                    success=True,
-                    correlation_id=cid,
-                    server_id=server_id,
-                    tool_name=tool_name,
-                    result=result,
-                    metadata={"transport": "streamable_http", "endpoint": server.endpoint},
-                )
-            else:
-                return OrchestrationResult(
-                    success=False,
-                    correlation_id=cid,
-                    server_id=server_id,
-                    tool_name=tool_name,
-                    error=f"Unsupported downstream transport '{transport}'.",
-                )
-        except Exception as e:  # noqa: BLE001 - Convert all downstream exceptions to sanitized result errors
-            sanitized_err = _sanitize_error_message(str(e))
-            logger.error("Downstream invocation failed for '%s/%s': %s", server_id, tool_name, sanitized_err)
-            return OrchestrationResult(
-                success=False,
-                correlation_id=cid,
-                server_id=server_id,
-                tool_name=tool_name,
-                error=f"Downstream tool execution failed: {sanitized_err}",
-            )
+        # 4. Return the validated call. OPM is a gateway; execution belongs to
+        # the caller or the downstream MCP server, regardless of transport.
+        return OrchestrationResult(
+            success=True,
+            correlation_id=cid,
+            server_id=server_id,
+            tool_name=tool_name,
+            result={
+                "server_id": server_id,
+                "tool_name": tool_name,
+                "arguments": sanitize_evidence(arguments),
+            },
+            metadata={
+                "gateway_only": True,
+                "downstream_transport": server.transport.value,
+                "execution": "caller_owned",
+            },
+        )

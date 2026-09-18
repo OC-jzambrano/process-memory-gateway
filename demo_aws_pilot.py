@@ -23,7 +23,7 @@ def run_pilot_demo() -> None:
                 server_id="odoo-main",
                 tool_name="create_record",
                 arguments={
-                    "model": "project.task",
+                    "model": "work.item",
                     "values": {"name": "[ENG] Refactor database schema"},
                 },
             )
@@ -91,7 +91,7 @@ def run_pilot_demo() -> None:
             action_context={
                 "system": "odoo",
                 "application": "project",
-                "resource": "project.task",
+                "resource": "work.item",
                 "operation": "create",
             },
         )

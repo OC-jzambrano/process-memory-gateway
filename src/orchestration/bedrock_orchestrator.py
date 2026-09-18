@@ -136,12 +136,11 @@ class BedrockOrchestrator:
 
     def _get_client(self):
         if self._client is None:
-            self._client = boto3.client(
-                "bedrock-runtime",
-                region_name=self.region_name,
-                aws_access_key_id=AWS_ACCESS_KEY_ID,
-                aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
-            )
+            client_kwargs = {"region_name": self.region_name}
+            if AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY:
+                client_kwargs["aws_access_key_id"] = AWS_ACCESS_KEY_ID
+                client_kwargs["aws_secret_access_key"] = AWS_SECRET_ACCESS_KEY
+            self._client = boto3.client("bedrock-runtime", **client_kwargs)
         return self._client
 
     def _clean_json(self, text: str) -> str:

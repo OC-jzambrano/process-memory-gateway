@@ -48,7 +48,7 @@ def multi_tenant_setup(tmp_path):
         return OrchestrationToolCall(
             server_id="odoo-main",
             tool_name="create_record",
-            arguments={"model": "project.task", "values": {"name": name}},
+            arguments={"model": "work.item", "values": {"name": name}},
         )
 
     orchestrator = BedrockOrchestrator(mock_handler=mock_synthesize)
@@ -81,7 +81,7 @@ def test_full_orchestration_lifecycle_with_memory_enforcement(multi_tenant_setup
         # Step 1: Stage instruction
         staged = service.remember_company_instruction(
             instruction_text="Engineering tasks must always start with [ENG] tag.",
-            context_hint=ActionContext(system="odoo", application="project", resource="project.task", operation="create"),
+            context_hint=ActionContext(system="odoo", application="project", resource="work.item", operation="create"),
         )
         assert staged.status == "staged"
         cand_id = staged.candidate_id
@@ -95,7 +95,7 @@ def test_full_orchestration_lifecycle_with_memory_enforcement(multi_tenant_setup
         assert reviewed.rule_id is not None
 
         # Step 3: Verify company context retrieval returns active rule
-        context = service.get_company_context(system="odoo", application="project", resource="project.task", operation="create")
+        context = service.get_company_context(system="odoo", application="project", resource="work.item", operation="create")
         assert len(context.rules) == 1
         assert context.rules[0].rule_id == reviewed.rule_id
 
@@ -142,15 +142,16 @@ def test_full_orchestration_lifecycle_with_memory_enforcement(multi_tenant_setup
         # Step 5: Run downstream request
         result = service.run_downstream_request(
             user_request="Refactor database schema",
-            action_context=ActionContext(system="odoo", application="project", resource="project.task", operation="create"),
+            action_context=ActionContext(system="odoo", application="project", resource="work.item", operation="create"),
         )
         assert result.success is True
         assert observed_rule_ids == [reviewed.rule_id]
         assert result.server_id == "odoo-main"
         assert result.tool_name == "create_record"
-        assert result.result["status"] == "mock_success"
+        assert result.result["arguments"]
+        assert result.metadata["gateway_only"] is True
         # Verify synthesized arguments adhered to company memory
-        received = result.result["received_arguments"]
+        received = result.result["arguments"]
         assert received["values"]["name"] == "[ENG] Refactor database schema"
 
     finally:

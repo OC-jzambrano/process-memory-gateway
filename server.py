@@ -136,7 +136,7 @@ def register_tools(mcp_app: FastMCP, service: Any) -> None:
         Args:
             system: Target system, defaults to 'odoo'.
             application: Target application, e.g. 'project'.
-            resource: Target resource/model, e.g. 'project.task'.
+            resource: Target resource/model, e.g. 'work.item'.
             operation: Target operation, e.g. 'create'.
             fields: Optional list of field names.
 
