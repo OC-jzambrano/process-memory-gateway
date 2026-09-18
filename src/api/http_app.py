@@ -6,7 +6,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Route
 
-from server import mcp
+from server import get_default_service, mcp
 from src.api.auth import (
     AuthenticationError,
     AuthorizationError,
@@ -23,10 +23,9 @@ from src.config import (
     DOMAIN_NAME,
     MCP_RESOURCE_URL,
 )
+from src.orchestration.dispatcher import DownstreamDispatcher
 from src.storage.db import get_connection
 from src.storage.repository import MemoryRepository
-from src.api.service import HostedProcessMemoryService
-from src.orchestration.dispatcher import DownstreamDispatcher
 from src.utils.privacy import sanitize_evidence
 
 logger = logging.getLogger(__name__)
@@ -154,7 +153,7 @@ async def downstream_status(request: Request) -> HTMLResponse:
                 probe = DownstreamDispatcher(repo).probe(server)
                 state = f"connected and ready: {len(probe.get('tools', []))} tool(s) discovered"
                 cls = "ready"
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - status endpoint must report probe failures
                 state = f"not ready: {sanitize_evidence(str(exc))}"
                 cls = "bad"
             html.append(f"<div class='server'><b>{server.server_id}</b> <span class='{cls}'>{state}</span><br><small>{server.transport.value} · {server.endpoint}</small></div>")
