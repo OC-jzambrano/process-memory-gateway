@@ -28,7 +28,7 @@ def calculate_specificity_score(rule: CanonicalRule) -> int:
 
 def matches_scope(
     rule: CanonicalRule,
-    system: str = "odoo",
+    system: str | None = None,
     application: str | None = None,
     resource: str | None = None,
     operation: str | None = None,
@@ -97,7 +97,7 @@ def matches_scope(
 
 def filter_and_order_rules(
     rules: list[CanonicalRule],
-    system: str = "odoo",
+    system: str | None = None,
     application: str | None = None,
     resource: str | None = None,
     operation: str | None = None,

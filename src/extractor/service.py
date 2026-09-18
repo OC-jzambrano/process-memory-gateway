@@ -206,6 +206,8 @@ class ProcessMemoryExtractorService:
                 source_quote=item.source_quote,
                 confidence=round(item.confidence, 3),
                 status=RuleStatus.PENDING_REVIEW,
+                structured_scope=item.structured_scope,
+                structured_constraint=item.structured_constraint,
             )
             candidates.append(candidate)
 

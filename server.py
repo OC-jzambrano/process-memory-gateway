@@ -124,7 +124,7 @@ def register_tools(mcp_app: FastMCP, service: Any) -> None:
     # --- TOOL 4: GET COMPANY CONTEXT (MEMORY PACK) ---
     @mcp_app.tool()
     def get_company_context(
-        system: str = "odoo",
+        system: str | None = None,
         application: str | None = None,
         resource: str | None = None,
         operation: str | None = None,

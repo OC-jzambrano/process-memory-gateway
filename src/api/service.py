@@ -7,7 +7,6 @@ from src.api.auth import AuthContextResolver
 from src.api.auth_context import get_current_context
 from src.extractor.service import ProcessMemoryExtractorService
 from src.governance.memory_retriever import MemoryRetriever
-from src.governance.scope_matcher import filter_and_order_rules
 from src.models.enums import (
     DecisionType,
     EnforcementMode,
@@ -104,13 +103,7 @@ class HostedProcessMemoryService:
         scope = context_hint or (
             first_candidate.structured_scope
             if first_candidate and first_candidate.structured_scope
-            else ActionContext(
-                system="odoo",
-                application="project",
-                resource="project.task",
-                operation="create",
-                fields=[],
-            )
+            else ActionContext()
         )
 
         # Use constraint only if explicitly detected by extractor
@@ -241,7 +234,7 @@ class HostedProcessMemoryService:
     # --- 4. GET COMPANY CONTEXT (MEMORY PACK) ---
     def get_company_context(
         self,
-        system: str = "odoo",
+        system: str | None = None,
         application: str | None = None,
         resource: str | None = None,
         operation: str | None = None,
@@ -346,13 +339,7 @@ class HostedProcessMemoryService:
         elif isinstance(action_context, ActionContext):
             scope = action_context
         else:
-            scope = ActionContext(
-                system="odoo",
-                application="project",
-                resource="project.task",
-                operation="create",
-                fields=[],
-            )
+            scope = ActionContext()
 
         # 1. Fetch registered downstream servers for company
         registered_servers = self.repo.list_downstream_mcps(company_id=ctx.company_id)
@@ -375,16 +362,27 @@ class HostedProcessMemoryService:
             )
 
         # 2. Retrieve matching approved canonical rules
-        all_approved_rules = self.repo.get_active_rules(client_id=ctx.company_id)
-        approved_rules = filter_and_order_rules(
-            rules=all_approved_rules,
+        pack = self.retriever.retrieve_pack(
+            company_id=ctx.company_id,
+            company_slug=ctx.company_slug,
             system=scope.system,
             application=scope.application,
             resource=scope.resource,
             operation=scope.operation,
             fields=scope.fields,
-            process_name=None,
         )
+        if pack.omitted_count:
+            return OrchestrationResult(
+                success=False, correlation_id=cid,
+                server_id=downstream_hint or "unknown", tool_name="none",
+                error="Relevant company memory exceeds the context budget; narrow the action context before executing.",
+                metadata={"memory_omitted_count": pack.omitted_count},
+            )
+        selected_ids = {r.rule_id for r in pack.rules}
+        approved_rules = [
+            rule for rule in self.repo.get_active_rules(client_id=ctx.company_id)
+            if rule.rule_id in selected_ids
+        ]
 
         # 3. Call Bedrock Orchestrator to synthesize structured tool call
         try:

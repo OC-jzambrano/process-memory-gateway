@@ -2,6 +2,7 @@ import pytest
 
 from src.api.auth_context import RequestContext, set_current_context
 from src.api.service import HostedProcessMemoryService
+from src.extractor.service import ProcessMemoryExtractorService
 from src.models.enums import CompanyStatus, MembershipStatus, RoleType
 from src.models.schemas import ActionContext, Company, Membership, User
 from src.storage.repository import MemoryRepository
@@ -10,7 +11,7 @@ from src.storage.repository import MemoryRepository
 @pytest.fixture
 def clean_service(tmp_path):
     repo = MemoryRepository(db_path=tmp_path / "no_dod.db")
-    service = HostedProcessMemoryService(repo=repo)
+    service = HostedProcessMemoryService(repo=repo, extractor=ProcessMemoryExtractorService(offline_mode=True))
 
     cid = "test_co_general"
     repo.upsert_company(

@@ -21,21 +21,21 @@ from src.models.enums import (
 
 # 1. Action Scope & Deterministic Constraints
 class ActionContext(BaseModel):
-    system: str = Field(default="odoo", description="Target system, e.g. 'odoo'.")
+    system: str | None = Field(default=None, description="Target system; unset means no system restriction.")
     application: str | None = Field(
-        default="project", description="Target application/module, e.g. 'project'."
+        default=None, description="Target application/module, e.g. 'project'."
     )
     resource: str | None = Field(
-        default="project.task",
+        default=None,
         description="Target model/resource, e.g. 'project.task'.",
     )
     operation: str | None = Field(
-        default="create",
+        default=None,
         description="Target operation, e.g. 'create', 'write', 'delete'.",
     )
     fields: list[str] = Field(
         default_factory=list,
-        description="Target field names, e.g. ['definition_of_done'].",
+        description="Target field names, when explicitly relevant.",
     )
 
 
@@ -216,12 +216,13 @@ class MemoryPackRuleItem(BaseModel):
 
 class MemoryPack(BaseModel):
     company_slug: str
-    system: str
+    system: str | None
     application: str | None = None
     resource: str | None = None
     operation: str | None = None
     rules: list[MemoryPackRuleItem] = Field(default_factory=list)
     token_budget_used: int = 0
+    omitted_count: int = 0
     message: str | None = None
 
 

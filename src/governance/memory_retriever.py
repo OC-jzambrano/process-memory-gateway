@@ -19,13 +19,15 @@ class MemoryRetriever:
         self,
         company_id: str,
         company_slug: str,
-        system: str = "odoo",
+        system: str | None = None,
         application: str | None = None,
         resource: str | None = None,
         operation: str | None = None,
         fields: list[str] | None = None,
         token_budget: int = 1500,
     ) -> MemoryPack:
+        if token_budget < 1:
+            raise ValueError("Memory token budget must be positive.")
         fields = fields or []
         # 1. Fetch all active canonical rules for company
         all_rules = self.repo.get_active_rules(client_id=company_id)
@@ -90,5 +92,6 @@ class MemoryRetriever:
             operation=operation,
             rules=final_rule_items,
             token_budget_used=approx_tokens,
+            omitted_count=omitted_count,
             message=msg,
         )

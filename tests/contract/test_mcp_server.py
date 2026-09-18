@@ -548,9 +548,9 @@ def test_internal_process_memory_tools_lifecycle():
 # 8. End-to-End Lifecycle of 6 Public Tools (Service Integration)
 # =========================================================================
 @pytest.fixture
-def clean_context():
+def clean_context(tmp_path, monkeypatch):
     cid = f"test_co_{uuid.uuid4().hex[:8]}"
-    repo = MemoryRepository()
+    repo = MemoryRepository(db_path=tmp_path / "public-lifecycle.db")
     repo.upsert_company(
         Company(
             company_id=cid,
@@ -584,11 +584,15 @@ def clean_context():
         role=RoleType.OWNER,
     )
     set_current_context(ctx)
-    from server import get_default_service
+    import server
+    from src.api.service import HostedProcessMemoryService
     from src.models.schemas import OrchestrationToolCall
     from src.orchestration.bedrock_orchestrator import BedrockOrchestrator
 
-    svc = get_default_service()
+    svc = HostedProcessMemoryService(
+        repo=repo, extractor=ProcessMemoryExtractorService(offline_mode=True)
+    )
+    monkeypatch.setattr(server, "_default_service", svc)
     old_orchestrator = svc.orchestrator
 
     def mock_orchestrate(**kwargs):
