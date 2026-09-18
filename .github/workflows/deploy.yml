@@ -83,15 +83,71 @@ jobs:
 
       - name: Deploy Image to EC2 via AWS Systems Manager
         env:
+          AWS_REGION: eu-north-1
           INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
           IMAGE_DIGEST: ${{ steps.build-image.outputs.image_digest }}
         run: |
+          if [ -z "$INSTANCE_ID" ]; then
+            echo "ERROR: Secret EC2_INSTANCE_ID is not configured or empty!"
+            exit 1
+          fi
+
+          echo "=== Step 1: Verify AWS Identity & EC2 Instance State ==="
+          aws sts get-caller-identity
+
+          echo "Checking EC2 instance status for $INSTANCE_ID in $AWS_REGION..."
+          aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --region "$AWS_REGION" \
+            --query "Reservations[].Instances[].{State:State.Name,IamProfile:IamInstanceProfile.Arn,Subnet:SubnetId}" \
+            --output json || {
+              echo "ERROR: Unable to describe instance $INSTANCE_ID. Verify the instance exists in region $AWS_REGION and account."
+              exit 1
+            }
+
+          echo "Waiting for EC2 instance to be running..."
+          aws ec2 wait instance-running --instance-ids "$INSTANCE_ID" --region "$AWS_REGION"
+
+          echo "Waiting for EC2 instance status ok (reachability & health checks)..."
+          aws ec2 wait instance-status-ok --instance-ids "$INSTANCE_ID" --region "$AWS_REGION"
+
+          echo "=== Step 2: Wait for AWS Systems Manager Agent Online ==="
+          MAX_RETRIES=36
+          RETRY_COUNT=0
+          ONLINE=0
+
+          until [ "$RETRY_COUNT" -ge "$MAX_RETRIES" ]; do
+            PING_STATUS=$(aws ssm describe-instance-information \
+              --region "$AWS_REGION" \
+              --filters "Key=InstanceIds,Values=$INSTANCE_ID" \
+              --query "InstanceInformationList[0].PingStatus" \
+              --output text 2>/dev/null || echo "NotFound")
+
+            if [ "$PING_STATUS" = "Online" ]; then
+              echo "Instance $INSTANCE_ID is registered and Online in SSM."
+              ONLINE=1
+              break
+            fi
+
+            echo "SSM PingStatus: $PING_STATUS. Waiting 10s for SSM agent (attempt $((RETRY_COUNT+1))/$MAX_RETRIES)..."
+            sleep 10
+            RETRY_COUNT=$((RETRY_COUNT+1))
+          done
+
+          if [ "$ONLINE" -ne 1 ]; then
+            echo "ERROR: EC2 instance $INSTANCE_ID failed to reach Online status in Systems Manager after 6 minutes."
+            echo "Current SSM Instance Information:"
+            aws ssm describe-instance-information --region "$AWS_REGION" \
+              --filters "Key=InstanceIds,Values=$INSTANCE_ID" || true
+            exit 1
+          fi
+
+          echo "=== Step 3: Dispatch Deployment Command via AWS SSM ==="
           COMPOSE_B64=$(base64 -w 0 docker-compose.yml)
           CADDY_B64=$(base64 -w 0 Caddyfile)
           DEPLOY_SCRIPT_B64=$(base64 -w 0 scripts/deploy_on_host.sh)
-          ECR_TOKEN=$(aws ecr get-login-password --region eu-north-1)
+          ECR_TOKEN=$(aws ecr get-login-password --region "$AWS_REGION")
 
           CMD_ID=$(aws ssm send-command \
+            --region "$AWS_REGION" \
             --instance-ids "$INSTANCE_ID" \
             --document-name "AWS-RunShellScript" \
             --comment "Deploy image ${GITHUB_SHA:0:7}" \
@@ -107,11 +163,11 @@ jobs:
 
           echo "Sent SSM deployment command ID: $CMD_ID"
           echo "Waiting for command completion on EC2 host..."
-          aws ssm wait command-executed --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" || true
+          aws ssm wait command-executed --region "$AWS_REGION" --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" || true
 
-          STATUS=$(aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" --query "Status" --output text)
-          OUTPUT=$(aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" --query "StandardOutputContent" --output text)
-          ERR_MSG=$(aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" --query "StandardErrorContent" --output text)
+          STATUS=$(aws ssm get-command-invocation --region "$AWS_REGION" --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" --query "Status" --output text)
+          OUTPUT=$(aws ssm get-command-invocation --region "$AWS_REGION" --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" --query "StandardOutputContent" --output text)
+          ERR_MSG=$(aws ssm get-command-invocation --region "$AWS_REGION" --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" --query "StandardErrorContent" --output text)
 
           echo "=== SSM Command Output ==="
           echo "$OUTPUT"

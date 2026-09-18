@@ -38,6 +38,13 @@ resource "aws_instance" "mcp_host" {
               apt-get update
               apt-get install -y ca-certificates curl gnupg lsb-release jq awscli
 
+              # Ensure amazon-ssm-agent is installed and active
+              if ! systemctl is-active --quiet snap.amazon-ssm-agent.amazon-ssm-agent.service; then
+                systemctl enable --now snapd || true
+                snap install amazon-ssm-agent --classic || true
+                systemctl enable --now snap.amazon-ssm-agent.amazon-ssm-agent.service || snap start amazon-ssm-agent || true
+              fi
+
               # Install Docker and Docker Compose Plugin
               install -m 0755 -d /etc/apt/keyrings
               curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg

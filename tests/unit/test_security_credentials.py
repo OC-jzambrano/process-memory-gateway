@@ -15,7 +15,7 @@ def test_executor_construction_fails_without_credentials():
     with pytest.raises(ValueError, match="Odoo URL is required"):
         Odoo17Connector(url="", db="db", username="user", password="pwd")
 
-    with pytest.raises(ValueError, match="Odoo Database name is required"):
+    with pytest.raises(ValueError, match="Odoo database name is required"):
         Odoo17Connector(
             url="https://odoo.com", db="", username="user", password="pwd"
         )

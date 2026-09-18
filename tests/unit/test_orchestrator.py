@@ -320,6 +320,143 @@ def test_dispatcher_resolves_aws_secret_for_odoo(tmp_path, monkeypatch):
     assert connector.password == "p1"
 
 
+def test_dispatcher_derives_odoo_db_from_hosted_url_when_secret_omits_db(tmp_path, monkeypatch):
+    """Hosted Odoo URLs allow the DB name to be omitted from the secret."""
+    repo = MemoryRepository(db_path=tmp_path / "dispatcher_secret_without_db.db")
+    repo.upsert_company(Company(company_id="co_secret", company_slug="co-secret", name="Secret Co"))
+    repo.upsert_downstream_mcp(
+        DownstreamMCPServer(
+            company_id="co_secret",
+            server_id="odoo",
+            endpoint="https://acme.odoo.com",
+            transport=MCPTransport.ODOO_XMLRPC,
+            secret_ref="arn:aws:secretsmanager:eu-north-1:123:secret:odoo",
+            available_tools=[DownstreamToolDefinition(name="create_record", input_schema={"type": "object"})],
+        )
+    )
+
+    class FakeSecrets:
+        def get_secret_value(self, SecretId):
+            assert SecretId.endswith(":odoo")
+            return {"SecretString": '{"username":"u1","password":"p1"}'}
+
+    monkeypatch.setattr("boto3.client", lambda service: FakeSecrets())
+    dispatcher = DownstreamDispatcher(repo=repo)
+    connector = dispatcher._resolve_odoo_connector(repo.get_downstream_mcp("co_secret", "odoo"))
+    assert connector.db == "acme"
+    assert connector.username == "u1"
+    assert connector.password == "p1"
+
+
+def test_dispatcher_does_not_guess_odoo_db_for_custom_domain(tmp_path, monkeypatch):
+    """Custom Odoo domains still require an explicit DB name in the secret."""
+    repo = MemoryRepository(db_path=tmp_path / "dispatcher_custom_domain_without_db.db")
+    repo.upsert_company(Company(company_id="co_secret", company_slug="co-secret", name="Secret Co"))
+    repo.upsert_downstream_mcp(
+        DownstreamMCPServer(
+            company_id="co_secret",
+            server_id="odoo",
+            endpoint="https://erp.example.com",
+            transport=MCPTransport.ODOO_XMLRPC,
+            secret_ref="arn:aws:secretsmanager:eu-north-1:123:secret:odoo",
+            available_tools=[DownstreamToolDefinition(name="create_record", input_schema={"type": "object"})],
+        )
+    )
+
+    class FakeSecrets:
+        def get_secret_value(self, SecretId):
+            assert SecretId.endswith(":odoo")
+            return {"SecretString": '{"username":"u1","password":"p1"}'}
+
+    monkeypatch.setattr("boto3.client", lambda service: FakeSecrets())
+    dispatcher = DownstreamDispatcher(repo=repo)
+    with pytest.raises(ValueError, match="Odoo database name is required"):
+        dispatcher._resolve_odoo_connector(repo.get_downstream_mcp("co_secret", "odoo"))
+
+
+def test_odoo_xmlrpc_dispatch_requires_explicit_model(tmp_path):
+    """Odoo XML-RPC dispatch must not default to any business model."""
+    repo = MemoryRepository(db_path=tmp_path / "dispatcher_odoo_model_required.db")
+    repo.upsert_company(Company(company_id="co_odoo", company_slug="co-odoo", name="Odoo Co"))
+    repo.upsert_downstream_mcp(
+        DownstreamMCPServer(
+            company_id="co_odoo",
+            server_id="odoo",
+            endpoint="https://odoo.example",
+            transport=MCPTransport.ODOO_XMLRPC,
+            available_tools=[
+                DownstreamToolDefinition(
+                    name="create_record",
+                    input_schema={
+                        "type": "object",
+                        "properties": {"name": {"type": "string"}},
+                        "required": ["name"],
+                    },
+                )
+            ],
+        )
+    )
+
+    dispatcher = DownstreamDispatcher(repo=repo, odoo_connector_factory=lambda server: None)
+    result = dispatcher.dispatch(
+        "co_odoo",
+        OrchestrationToolCall(
+            server_id="odoo", tool_name="create_record", arguments={"name": "No model"}
+        ),
+    )
+
+    assert result.success is False
+    assert "requires an explicit non-empty 'model'" in (result.error or "")
+
+
+def test_odoo_xmlrpc_dispatch_uses_generic_values_payload(tmp_path):
+    """Odoo XML-RPC dispatch passes the explicit model and values object unchanged."""
+    repo = MemoryRepository(db_path=tmp_path / "dispatcher_odoo_values.db")
+    repo.upsert_company(Company(company_id="co_odoo", company_slug="co-odoo", name="Odoo Co"))
+    repo.upsert_downstream_mcp(
+        DownstreamMCPServer(
+            company_id="co_odoo",
+            server_id="odoo",
+            endpoint="https://odoo.example",
+            transport=MCPTransport.ODOO_XMLRPC,
+            available_tools=[
+                DownstreamToolDefinition(
+                    name="create_record",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "model": {"type": "string"},
+                            "values": {"type": "object"},
+                        },
+                        "required": ["model", "values"],
+                    },
+                )
+            ],
+        )
+    )
+    calls = {}
+
+    class FakeOdooConnector:
+        def create_record(self, model, values):
+            calls.update(model=model, values=values)
+            return {"id": 123, "model": model, "values": values}
+
+    dispatcher = DownstreamDispatcher(
+        repo=repo, odoo_connector_factory=lambda server: FakeOdooConnector()
+    )
+    result = dispatcher.dispatch(
+        "co_odoo",
+        OrchestrationToolCall(
+            server_id="odoo",
+            tool_name="create_record",
+            arguments={"model": "res.partner", "values": {"name": "Acme"}},
+        ),
+    )
+
+    assert result.success is True
+    assert calls == {"model": "res.partner", "values": {"name": "Acme"}}
+
+
 def test_bedrock_orchestrator_mock_handler():
     """BedrockOrchestrator invokes mock handler offline when provided."""
     expected_call = OrchestrationToolCall(

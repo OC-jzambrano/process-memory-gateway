@@ -3,6 +3,7 @@ import logging
 import uuid
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import urlparse
 
 import anyio
 
@@ -92,7 +93,7 @@ class DownstreamDispatcher:
 
         # Default: build Odoo17Connector from endpoint and connection or secret
         # Check if secret_ref contains credentials JSON or secret ARN
-        db = "community"
+        db = None
         login = None
         password = None
 
@@ -108,12 +109,23 @@ class DownstreamDispatcher:
             if conn_config:
                 db = conn_config.odoo_db or db
 
+        db = db or self._derive_odoo_db_from_url(server.endpoint)
+
         return Odoo17Connector(
             url=server.endpoint,
-            db=db,
+            db=db or "",
             username=login or "",
             password=password or "",
         )
+
+    @staticmethod
+    def _derive_odoo_db_from_url(endpoint: str) -> str | None:
+        """Best-effort DB name derivation for hosted Odoo URLs such as myco.odoo.com."""
+        host = urlparse(endpoint).hostname or ""
+        parts = host.split(".")
+        if len(parts) >= 3 and parts[-2:] in (["odoo", "com"], ["odoo", "sh"]):
+            return parts[0] or None
+        return None
 
     @staticmethod
     def _load_secret(secret_ref: str) -> dict[str, Any] | None:
@@ -222,9 +234,17 @@ class DownstreamDispatcher:
             transport = server.transport
             if transport == MCPTransport.ODOO_XMLRPC:
                 connector = self._resolve_odoo_connector(server)
-                # Determine target model from arguments, schema, or default to project.task
-                model = arguments.pop("model", None) or "project.task"
-                result = connector.create_record(model=model, values=arguments)
+                model = arguments.pop("model", None)
+                if not isinstance(model, str) or not model.strip():
+                    raise ValueError("Odoo XML-RPC create_record requires an explicit non-empty 'model' argument.")
+
+                values = arguments.pop("values", None)
+                if values is None:
+                    values = arguments
+                elif not isinstance(values, dict):
+                    raise ValueError("Odoo XML-RPC create_record 'values' argument must be an object.")
+
+                result = connector.create_record(model=model.strip(), values=values)
                 return OrchestrationResult(
                     success=True,
                     correlation_id=cid,

@@ -67,7 +67,10 @@ class Odoo17Connector:
         if not url:
             raise ValueError("Odoo URL is required")
         if not db:
-            raise ValueError("Odoo Database name is required")
+            raise ValueError(
+                "Odoo database name is required. Add 'database' to the secret, "
+                "or use a hosted Odoo URL like https://mycompany.odoo.com so OPM can infer it."
+            )
 
         eff_username = username or kwargs.get("login")
         if not eff_username:
