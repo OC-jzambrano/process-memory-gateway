@@ -3,7 +3,7 @@ import logging
 
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Route
 
 from server import mcp
@@ -25,6 +25,8 @@ from src.config import (
 )
 from src.storage.db import get_connection
 from src.storage.repository import MemoryRepository
+from src.api.service import HostedProcessMemoryService
+from src.orchestration.dispatcher import DownstreamDispatcher
 from src.utils.privacy import sanitize_evidence
 
 logger = logging.getLogger(__name__)
@@ -110,6 +112,63 @@ async def health_ready(request: Request) -> JSONResponse:
             "schema_version": schema_version,
         }
     )
+
+
+DOWNSTREAM_UI = """<!doctype html><html><head><meta charset='utf-8'><title>OPM Downstreams</title>
+<style>body{font:15px system-ui;max-width:900px;margin:40px auto;padding:0 20px;color:#18212b}input,select,button{padding:10px;margin:5px 0;width:100%;box-sizing:border-box}button{cursor:pointer;background:#1769aa;color:white;border:0}.row{display:grid;grid-template-columns:1fr 1fr;gap:16px}.server{border:1px solid #ccd5df;padding:14px;margin:12px 0;border-radius:6px}.ready{color:#087f3f}.bad{color:#b42318}</style></head>
+<body><h1>OPM downstreams</h1><p>Register a downstream by secret reference. Credentials are never stored in OPM.</p>
+<form id='form'><div class='row'><label>Server ID<input name='server_id' required placeholder='odoo-main'></label><label>Transport<select name='transport'><option value='odoo_xmlrpc'>Odoo XML-RPC</option><option value='streamable_http'>Streamable HTTP</option><option value='stdio'>stdio</option></select></label></div>
+<label>Endpoint<input name='endpoint' required placeholder='https://example.com'></label><label>Secrets Manager ARN<input name='secret_ref' required placeholder='arn:aws:secretsmanager:...'></label><button>Register and connect</button></form><section id='servers'></section>
+<script>const f=document.querySelector('#form'),out=document.querySelector('#servers');async function load(){let r=await fetch('/admin/downstreams/status',{headers:{Authorization:localStorage.opmBearer||''}});out.innerHTML=await r.text()}f.onsubmit=async e=>{e.preventDefault();let x=Object.fromEntries(new FormData(f));let r=await fetch('/admin/downstreams/register',{method:'POST',headers:{'Content-Type':'application/json',Authorization:localStorage.opmBearer||''},body:JSON.stringify(x)});alert(await r.text());load()};load()</script></body></html>"""
+
+
+async def downstream_ui(request: Request) -> HTMLResponse:
+    return HTMLResponse(DOWNSTREAM_UI)
+
+
+async def downstream_register(request: Request) -> JSONResponse:
+    data = await request.json()
+    ctx = await _resolve_ui_context(request)
+    set_current_context(ctx)
+    try:
+        result = get_default_service().register_downstream_mcp(
+            server_id=data["server_id"], endpoint=data["endpoint"],
+            transport=data.get("transport", "streamable_http"),
+            secret_ref=data["secret_ref"], available_tools=data.get("available_tools"),
+        )
+        return JSONResponse(result.model_dump())
+    finally:
+        set_current_context(None)
+
+
+async def downstream_status(request: Request) -> HTMLResponse:
+    ctx = await _resolve_ui_context(request)
+    set_current_context(ctx)
+    try:
+        servers = get_default_service().list_downstream_mcps()
+        html = []
+        for server in servers:
+            state = "registered, awaiting connection check"
+            cls = ""
+            try:
+                probe = DownstreamDispatcher(repo).probe(server)
+                state = f"connected and ready: {len(probe.get('tools', []))} tool(s) discovered"
+                cls = "ready"
+            except Exception as exc:
+                state = f"not ready: {sanitize_evidence(str(exc))}"
+                cls = "bad"
+            html.append(f"<div class='server'><b>{server.server_id}</b> <span class='{cls}'>{state}</span><br><small>{server.transport.value} · {server.endpoint}</small></div>")
+        return HTMLResponse("".join(html) or "<p>No downstreams registered.</p>")
+    finally:
+        set_current_context(None)
+
+
+async def _resolve_ui_context(request: Request):
+    auth = request.headers.get("authorization", "")
+    if not auth.lower().startswith("bearer "):
+        raise AuthenticationError("Missing Bearer token")
+    claims = token_verifier.verify_token(auth[7:].strip())
+    return resolve_authenticated_context(claims=claims, company_slug=request.query_params.get("company", ""), repo=repo, client_agent="opm-ui")
 
 
 async def oauth_discovery(request: Request) -> JSONResponse:
@@ -270,6 +329,9 @@ def create_app() -> Starlette:
         routes=[
             Route("/health/live", health_live, methods=["GET"]),
             Route("/health/ready", health_ready, methods=["GET"]),
+            Route("/admin/downstreams", downstream_ui, methods=["GET"]),
+            Route("/admin/downstreams/register", downstream_register, methods=["POST"]),
+            Route("/admin/downstreams/status", downstream_status, methods=["GET"]),
             Route(
                 "/.well-known/oauth-authorization-server",
                 oauth_discovery,

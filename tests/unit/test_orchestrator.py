@@ -210,8 +210,8 @@ def test_dispatcher_unregistered_tool_fails_closed(tmp_path):
     assert "not registered in the allowlist" in (result.error or "")
 
 
-def test_dispatcher_internal_mock_returns_validated_call(tmp_path):
-    """Internal mock transport returns a validated call without executing it."""
+def test_dispatcher_internal_mock_execution(tmp_path):
+    """Internal mock transport executes successfully and returns sanitized arguments."""
     repo = MemoryRepository(db_path=tmp_path / "dispatcher_test2.db")
     repo.upsert_company(
         Company(
@@ -249,16 +249,12 @@ def test_dispatcher_internal_mock_returns_validated_call(tmp_path):
     result = dispatcher.dispatch("co_test", tool_call)
     assert result.success is True
     assert result.tool_name == "ping"
-    assert result.result == {
-        "server_id": "srv_mock",
-        "tool_name": "ping",
-        "arguments": {"message": "hello world"},
-    }
-    assert result.metadata["gateway_only"] is True
+    assert result.result["status"] == "mock_success"
+    assert result.result["received_arguments"] == {"message": "hello world"}
 
 
-def test_dispatcher_streamable_http_returns_validated_call(tmp_path, monkeypatch):
-    """Streamable HTTP transport is returned to the caller for execution."""
+def test_dispatcher_streamable_http_invokes_client(tmp_path, monkeypatch):
+    """Streamable HTTP transport invokes the registered downstream tool."""
     repo = MemoryRepository(db_path=tmp_path / "dispatcher_http.db")
     repo.upsert_company(Company(company_id="co_http", company_slug="co-http", name="HTTP Co"))
     repo.upsert_downstream_mcp(
@@ -276,7 +272,12 @@ def test_dispatcher_streamable_http_returns_validated_call(tmp_path, monkeypatch
         )
     )
 
+    called = {}
+    def fake_dispatch(server, tool_name, arguments):
+        called.update(server=server.server_id, tool=tool_name, arguments=arguments)
+        return {"id": 42}
     dispatcher = DownstreamDispatcher(repo=repo)
+    monkeypatch.setattr(dispatcher, "_dispatch_streamable_http", fake_dispatch)
     result = dispatcher.dispatch(
         "co_http",
         OrchestrationToolCall(
@@ -285,12 +286,8 @@ def test_dispatcher_streamable_http_returns_validated_call(tmp_path, monkeypatch
     )
 
     assert result.success is True
-    assert result.result == {
-        "server_id": "srv_http",
-        "tool_name": "create_record",
-        "arguments": {"name": "x"},
-    }
-    assert result.metadata["gateway_only"] is True
+    assert result.result == {"id": 42}
+    assert called == {"server": "srv_http", "tool": "create_record", "arguments": {"name": "x"}}
 
 
 def test_dispatcher_resolves_aws_secret_for_odoo(tmp_path, monkeypatch):
@@ -375,8 +372,8 @@ def test_dispatcher_does_not_guess_odoo_db_for_custom_domain(tmp_path, monkeypat
         dispatcher._resolve_odoo_connector(repo.get_downstream_mcp("co_secret", "odoo"))
 
 
-def test_odoo_xmlrpc_dispatch_returns_call_without_execution_requirements(tmp_path):
-    """Gateway validation does not impose Odoo execution-specific arguments."""
+def test_odoo_xmlrpc_dispatch_requires_explicit_model(tmp_path):
+    """Odoo XML-RPC dispatch requires an explicit model."""
     repo = MemoryRepository(db_path=tmp_path / "dispatcher_odoo_model_required.db")
     repo.upsert_company(Company(company_id="co_odoo", company_slug="co-odoo", name="Odoo Co"))
     repo.upsert_downstream_mcp(
@@ -406,12 +403,11 @@ def test_odoo_xmlrpc_dispatch_returns_call_without_execution_requirements(tmp_pa
         ),
     )
 
-    assert result.success is True
-    assert result.metadata["gateway_only"] is True
+    assert result.success is False
 
 
-def test_odoo_xmlrpc_dispatch_returns_generic_values_payload(tmp_path):
-    """Gateway returns the explicit model and values object unchanged."""
+def test_odoo_xmlrpc_dispatch_uses_generic_values_payload(tmp_path):
+    """Odoo XML-RPC dispatch passes the explicit model and values object unchanged."""
     repo = MemoryRepository(db_path=tmp_path / "dispatcher_odoo_values.db")
     repo.upsert_company(Company(company_id="co_odoo", company_slug="co-odoo", name="Odoo Co"))
     repo.upsert_downstream_mcp(
@@ -455,9 +451,7 @@ def test_odoo_xmlrpc_dispatch_returns_generic_values_payload(tmp_path):
     )
 
     assert result.success is True
-    assert calls == {}
-    assert result.result["arguments"] == {"model": "res.partner", "values": {"name": "Acme"}}
-    assert result.metadata["gateway_only"] is True
+    assert calls == {"model": "res.partner", "values": {"name": "Acme"}}
 
 
 def test_bedrock_orchestrator_mock_handler():

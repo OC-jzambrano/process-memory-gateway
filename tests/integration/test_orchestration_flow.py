@@ -148,10 +148,9 @@ def test_full_orchestration_lifecycle_with_memory_enforcement(multi_tenant_setup
         assert observed_rule_ids == [reviewed.rule_id]
         assert result.server_id == "odoo-main"
         assert result.tool_name == "create_record"
-        assert result.result["arguments"]
-        assert result.metadata["gateway_only"] is True
+        assert result.result["status"] == "mock_success"
         # Verify synthesized arguments adhered to company memory
-        received = result.result["arguments"]
+        received = result.result["received_arguments"]
         assert received["values"]["name"] == "[ENG] Refactor database schema"
 
     finally:

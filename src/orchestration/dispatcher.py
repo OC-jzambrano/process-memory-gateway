@@ -229,21 +229,73 @@ class DownstreamDispatcher:
                 error=f"Protocol schema validation error: {sve}",
             )
 
-        # 4. Return the validated call. OPM is a gateway; execution belongs to
-        # the caller or the downstream MCP server, regardless of transport.
+        # 4. Broker the already-approved call. Agents never receive downstream
+        # credentials and cannot reach this execution path without OPM policy.
+        try:
+            if server.transport == MCPTransport.ODOO_XMLRPC:
+                connector = self._resolve_odoo_connector(server)
+                model = arguments.get("model", "")
+                if tool_name == "create_record":
+                    result = connector.create_record(model=model, values=arguments.get("values", {}))
+                else:
+                    result = connector.execute_kw(
+                        model=model,
+                        method=arguments.get("method", tool_name),
+                        args=arguments.get("args", []),
+                        kwargs=arguments.get("kwargs", {}),
+                    )
+            elif server.transport == MCPTransport.STREAMABLE_HTTP:
+                result = self._dispatch_streamable_http(server, tool_name, arguments)
+            elif server.transport == MCPTransport.INTERNAL_MOCK:
+                result = self.mock_handler(server, tool_call) if self.mock_handler else {
+                    "status": "mock_success",
+                    "received_arguments": sanitize_evidence(arguments),
+                }
+            else:
+                raise ValueError(f"Unsupported downstream transport '{server.transport}'.")
+        except Exception as exc:  # noqa: BLE001 - adapter boundary
+            sanitized_err = _sanitize_error_message(str(exc))
+            logger.error("Downstream broker execution failed for '%s/%s': %s", server_id, tool_name, sanitized_err)
+            return OrchestrationResult(
+                success=False,
+                correlation_id=cid,
+                server_id=server_id,
+                tool_name=tool_name,
+                error=f"Downstream execution failed: {sanitized_err}",
+                metadata={"brokered_by_opm": True},
+            )
+
         return OrchestrationResult(
             success=True,
             correlation_id=cid,
             server_id=server_id,
             tool_name=tool_name,
-            result={
-                "server_id": server_id,
-                "tool_name": tool_name,
-                "arguments": sanitize_evidence(arguments),
-            },
-            metadata={
-                "gateway_only": True,
-                "downstream_transport": server.transport.value,
-                "execution": "caller_owned",
-            },
+            result=result,
+            metadata={"brokered_by_opm": True, "transport": server.transport.value},
         )
+
+    async def _probe_streamable_http(self, endpoint: str, headers: dict[str, str]) -> list[dict[str, Any]]:
+        from mcp import ClientSession
+        from mcp.client.streamable_http import streamable_http_client
+
+        async with streamable_http_client(endpoint) as streams, ClientSession(streams[0], streams[1]) as session:
+            await session.initialize()
+            tools = await session.list_tools()
+            return [tool.model_dump() if hasattr(tool, "model_dump") else {"name": getattr(tool, "name", "")} for tool in tools.tools]
+
+    def probe(self, server: DownstreamMCPServer) -> dict[str, Any]:
+        """Verify credentials and discover downstream capabilities without executing a tool."""
+        if server.transport == MCPTransport.ODOO_XMLRPC:
+            connector = self._resolve_odoo_connector(server)
+            if not connector.healthcheck():
+                raise RuntimeError("Odoo authentication or connectivity check failed")
+            return {"connected": True, "tools": [tool.name for tool in server.available_tools]}
+        if server.transport == MCPTransport.STREAMABLE_HTTP:
+            secret = self._load_secret(server.secret_ref or "") or {}
+            headers = secret.get("headers", {}) if isinstance(secret, dict) else {}
+            token = secret.get("access_token") or secret.get("token") if isinstance(secret, dict) else None
+            if token:
+                headers = {**headers, "Authorization": f"Bearer {token}"}
+            tools = anyio.run(self._probe_streamable_http, server.endpoint, headers)
+            return {"connected": True, "tools": tools}
+        raise RuntimeError(f"Connection probing is not supported for transport '{server.transport.value}'")
