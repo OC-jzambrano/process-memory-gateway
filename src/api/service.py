@@ -21,6 +21,7 @@ from src.models.schemas import (
     ActionContext,
     CandidateResult,
     CandidateRule,
+    CanonicalRuleStatusResult,
     DeterministicConstraint,
     DownstreamMCPServer,
     DownstreamToolDefinition,
@@ -230,6 +231,39 @@ class HostedProcessMemoryService:
                 decision=DecisionType.REJECT,
                 message=f"Candidate '{candidate_id}' was rejected and will not be enforced.",
             )
+
+    def set_canonical_rule_status(
+        self,
+        rule_id: str,
+        status: Literal["approved", "archived"],
+        notes: str | None = None,
+    ) -> CanonicalRuleStatusResult:
+        """Enable or disable one canonical rule for the authenticated company."""
+        ctx = get_current_context()
+        self.auth_resolver.require_role(ctx, [RoleType.OWNER, RoleType.REVIEWER])
+
+        rule = self.repo.get_rule(rule_id=rule_id, client_id=ctx.company_id)
+        if not rule:
+            raise ValueError(
+                f"Canonical Rule with ID '{rule_id}' not found for tenant '{ctx.company_id}'."
+            )
+
+        updated = self.repo.set_rule_status(
+            rule_id=rule_id,
+            status=status,
+            reviewer=ctx.user_id,
+            client_id=ctx.company_id,
+            notes=notes,
+        )
+        return CanonicalRuleStatusResult(
+            status=updated.status.value,
+            rule_id=updated.rule_id,
+            previous_status=rule.status.value,
+            message=(
+                f"Canonical Rule '{updated.rule_id}' is now '{updated.status.value}' "
+                "and will be excluded from prompts when archived."
+            ),
+        )
 
     # --- 4. GET COMPANY CONTEXT (MEMORY PACK) ---
     def get_company_context(

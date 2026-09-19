@@ -12,6 +12,7 @@ from server import (
     remember_company_instruction,
     review_memory_candidate,
     run_downstream_request,
+    set_canonical_rule_status,
 )
 
 
@@ -35,6 +36,7 @@ def test_public_mcp_tools_contain_no_caller_controlled_identity_args():
         remember_company_instruction,
         list_memory_candidates,
         review_memory_candidate,
+        set_canonical_rule_status,
         get_company_context,
         register_downstream_mcp,
         run_downstream_request,

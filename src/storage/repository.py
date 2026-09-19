@@ -936,6 +936,97 @@ class MemoryRepository(BaseRepository):
                 )
         return None
 
+    def set_rule_status(
+        self,
+        rule_id: str,
+        status: RuleStatus | str,
+        reviewer: str,
+        client_id: str | None = None,
+        notes: str | None = None,
+    ) -> CanonicalRule:
+        target_status = RuleStatus(status)
+        if target_status not in (RuleStatus.APPROVED, RuleStatus.ARCHIVED):
+            raise ValueError("Canonical rules may only be toggled to 'approved' or 'archived'.")
+
+        now = self._now()
+        event_id = f"evt_{uuid.uuid4().hex}"
+        with db_session(self.db_path) as conn:
+            if client_id:
+                row = conn.execute(
+                    "SELECT * FROM canonical_rules WHERE rule_id = ? AND client_id = ?",
+                    (rule_id, client_id),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT * FROM canonical_rules WHERE rule_id = ?", (rule_id,)
+                ).fetchone()
+
+            if not row:
+                raise ValueError(
+                    f"Canonical Rule with ID '{rule_id}' not found for tenant '{client_id or 'any'}'."
+                )
+
+            data = dict(row)
+            previous_status = RuleStatus(data["status"])
+            if previous_status not in (RuleStatus.APPROVED, RuleStatus.ARCHIVED):
+                raise ValueError(
+                    f"Rule '{rule_id}' cannot be toggled from '{previous_status.value}'."
+                )
+            if previous_status == target_status:
+                raise ValueError(
+                    f"Rule '{rule_id}' is already '{target_status.value}'."
+                )
+
+            with conn:
+                conn.execute(
+                    "UPDATE canonical_rules SET status = ?, updated_at = ? WHERE rule_id = ? AND status = ?",
+                    (target_status.value, now, rule_id, previous_status.value),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO review_events
+                    (event_id, client_id, candidate_id, rule_id, event_type, reviewer, decision, notes, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        event_id,
+                        data["client_id"],
+                        data.get("source_candidate_id"),
+                        rule_id,
+                        EventType.RULE_ARCHIVED.value
+                        if target_status == RuleStatus.ARCHIVED
+                        else EventType.RULE_RESTORED.value,
+                        reviewer,
+                        DecisionType.ARCHIVE.value
+                        if target_status == RuleStatus.ARCHIVED
+                        else DecisionType.RESTORE.value,
+                        notes,
+                        now,
+                    ),
+                )
+
+            data["status"] = target_status.value
+            data["updated_at"] = now
+            return CanonicalRule(
+                rule_id=data["rule_id"],
+                client_id=data["client_id"],
+                process_name=data.get("process_name") or "general",
+                rule_text=data["rule_text"],
+                rule_type=data["rule_type"],
+                severity=data["severity"],
+                enforcement_mode=data["enforcement_mode"],
+                version=data["version"],
+                status=data["status"],
+                source_candidate_id=data.get("source_candidate_id"),
+                replaced_by_rule_id=data.get("replaced_by_rule_id"),
+                structured_scope=self._deserialize_scope(data.get("structured_scope_json")),
+                structured_constraint=self._deserialize_constraint(data.get("structured_constraint_json")),
+                approved_by=data["approved_by"],
+                approved_at=data.get("approved_at"),
+                created_at=data.get("created_at"),
+                updated_at=data.get("updated_at"),
+            )
+
     def get_active_rules(
         self,
         client_id: str,

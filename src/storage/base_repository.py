@@ -99,6 +99,16 @@ class BaseRepository(ABC):
     ) -> CanonicalRule | None: ...
 
     @abstractmethod
+    def set_rule_status(
+        self,
+        rule_id: str,
+        status: RuleStatus | str,
+        reviewer: str,
+        client_id: str | None = None,
+        notes: str | None = None,
+    ) -> CanonicalRule: ...
+
+    @abstractmethod
     def review_candidate(
         self,
         candidate_id: str,

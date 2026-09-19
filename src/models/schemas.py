@@ -246,6 +246,13 @@ class ReviewResult(BaseModel):
     message: str
 
 
+class CanonicalRuleStatusResult(BaseModel):
+    status: str
+    rule_id: str
+    previous_status: str
+    message: str
+
+
 # 10. Downstream MCP Registry & Orchestration Models
 class DownstreamToolDefinition(BaseModel):
     name: str = Field(min_length=1)

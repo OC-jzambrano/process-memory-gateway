@@ -3,19 +3,25 @@
 When acting as an AI coding agent or assistant (Codex, Claude, Antigravity, or Cursor), follow these operational guidelines:
 
 ## 1. Process Memory & MCP Orchestration (Public MCP Surface)
-- **Approved Public MCP Tools (6 Only):**
+- **Approved Public MCP Tools (7 Only):**
   1. `remember_company_instruction`: Stage proposed operational rules, conventions, or constraints from dialogue as `pending_review`.
   2. `list_memory_candidates`: List staged candidates awaiting human review for the authenticated company.
   3. `review_memory_candidate`: Submit owner/reviewer decision (`approve`, `edit`, `reject`) to promote candidates into active canonical rules.
   4. `get_company_context`: Retrieve approved active canonical policies (`MemoryPack`) for the target system and action scope.
   5. `register_downstream_mcp`: Configure downstream MCP servers/adapters, schemas, and supported action contexts per company.
   6. `run_downstream_request`: Safe orchestration entrypoint that injects approved company memory into the Bedrock prompt, requires a structured tool call, validates schemas, and invokes downstream tools.
+  7. `set_canonical_rule_status`: Owner/reviewer-controlled toggle between `approved` and `archived`; archived rules are excluded from Memory Packs and prompts.
 - **Server-Resolved Identity & Clean Signatures:**
   - Never supply caller-controlled identity arguments (`client_id`, `company_id`, `reviewer`, `role`) to public MCP tools.
   - All tenant and user context is resolved cryptographically by the server from the Cognito OAuth 2.0 Bearer token.
 - **Enforcement Rules:**
   - Approved rules act as authoritative company memory injected into model prompts; OPM contains zero hard-coded DoD or ERP business logic.
-  - Use `run_downstream_request` to invoke downstream actions safely with approved company instructions injected.
+  - For Odoo actions, always use `run_downstream_request` with a complete `action_context`. The orchestrator automatically retrieves and injects approved canonical rules matching that context.
+  - Do not call `get_company_context` separately before execution unless the rules need to be inspected or explained. Do not duplicate canonical rules manually in the request.
+  - `action_context` must include `system`, `application`, `resource`, `operation`, and relevant `fields`.
+  - Perform prerequisite lookups through MCP when IDs are required, such as resolving Odoo project or user IDs.
+  - Do not execute Odoo actions directly outside `run_downstream_request`.
+  - Verify the result after every mutating downstream action.
 
 ## 2. Architecture & Code Integrity
 - Public MCP tools are declared in `server.py` and served via `src/api/http_app.py`.

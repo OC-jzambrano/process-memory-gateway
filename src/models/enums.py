@@ -35,6 +35,8 @@ class DecisionType(str, Enum):
     REJECT = "reject"
     EDIT = "edit"
     SUPERSEDE = "supersede"
+    ARCHIVE = "archive"
+    RESTORE = "restore"
     ESCALATE = "escalate"
 
 
@@ -42,6 +44,7 @@ class EventType(str, Enum):
     CANDIDATE_REVIEW = "candidate_review"
     RULE_SUPERSEDED = "rule_superseded"
     RULE_ARCHIVED = "rule_archived"
+    RULE_RESTORED = "rule_restored"
 
 
 class SourceType(str, Enum):

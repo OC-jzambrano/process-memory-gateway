@@ -52,6 +52,8 @@ def test_decision_type_values():
         "reject",
         "edit",
         "supersede",
+        "archive",
+        "restore",
         "escalate",
     }
 
@@ -61,6 +63,7 @@ def test_event_type_values():
         "candidate_review",
         "rule_superseded",
         "rule_archived",
+        "rule_restored",
     }
 
 

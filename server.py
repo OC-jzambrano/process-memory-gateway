@@ -21,6 +21,7 @@ __all__ = [
     "remember_company_instruction",
     "review_memory_candidate",
     "run_downstream_request",
+    "set_canonical_rule_status",
 ]
 
 # Lazy runtime dependencies - deferred to avoid initializing database at import time
@@ -44,7 +45,7 @@ def get_default_service():
 
 def register_tools(mcp_app: FastMCP, service: Any) -> None:
     """
-    Registers exactly the six approved public MCP tools onto the given FastMCP instance.
+    Registers the approved public MCP tools onto the given FastMCP instance.
     All caller identity is server-resolved from the authenticated request context.
     """
 
@@ -121,7 +122,35 @@ def register_tools(mcp_app: FastMCP, service: Any) -> None:
         )
         return result.model_dump_json(indent=2)
 
-    # --- TOOL 4: GET COMPANY CONTEXT (MEMORY PACK) ---
+    # --- TOOL 4: SET CANONICAL RULE STATUS ---
+    @mcp_app.tool()
+    def set_canonical_rule_status(
+        rule_id: str,
+        status: Literal["approved", "archived"],
+        notes: str | None = None,
+    ) -> str:
+        """
+        Enables or disables one canonical rule for the authenticated company.
+        Only company owners and reviewers may change rule status. Archived rules
+        are excluded from Memory Packs and downstream prompts; approved rules
+        are included again when their action scope matches.
+
+        Args:
+            rule_id: Canonical rule identifier.
+            status: 'archived' to disable the rule or 'approved' to restore it.
+            notes: Optional audit note for the status change.
+
+        Returns:
+            JSON string containing the updated rule status and audit result.
+        """
+        result = service.set_canonical_rule_status(
+            rule_id=rule_id,
+            status=status,
+            notes=notes,
+        )
+        return result.model_dump_json(indent=2)
+
+    # --- TOOL 5: GET COMPANY CONTEXT (MEMORY PACK) ---
     @mcp_app.tool()
     def get_company_context(
         system: str | None = None,
@@ -152,7 +181,7 @@ def register_tools(mcp_app: FastMCP, service: Any) -> None:
         )
         return pack.model_dump_json(indent=2)
 
-    # --- TOOL 5: REGISTER DOWNSTREAM MCP SERVER ---
+    # --- TOOL 6: REGISTER DOWNSTREAM MCP SERVER ---
     @mcp_app.tool()
     def register_downstream_mcp(
         server_id: str,
@@ -186,7 +215,7 @@ def register_tools(mcp_app: FastMCP, service: Any) -> None:
         )
         return result.model_dump_json(indent=2)
 
-    # --- TOOL 6: RUN DOWNSTREAM REQUEST (ORCHESTRATION ENTRYPOINT) ---
+    # --- TOOL 7: RUN DOWNSTREAM REQUEST (ORCHESTRATION ENTRYPOINT) ---
     @mcp_app.tool()
     def run_downstream_request(
         user_request: str,
@@ -221,7 +250,7 @@ def register_tools(mcp_app: FastMCP, service: Any) -> None:
 
 def create_mcp_server(service: Any | None = None) -> FastMCP:
     """
-    Factory constructing a FastMCP server with the six approved tools registered.
+    Factory constructing a FastMCP server with the approved tools registered.
     Accepts an injected service instance (production HostedProcessMemoryService or Fake for tests).
     """
     svc = service if service is not None else get_default_service()
@@ -276,6 +305,19 @@ def review_memory_candidate(
         edited_rule_text=edited_rule_text,
         edited_scope=scope,
         edited_constraint=edited_constraint,
+        notes=notes,
+    )
+    return result.model_dump_json(indent=2)
+
+
+def set_canonical_rule_status(
+    rule_id: str,
+    status: Literal["approved", "archived"],
+    notes: str | None = None,
+) -> str:
+    result = get_default_service().set_canonical_rule_status(
+        rule_id=rule_id,
+        status=status,
         notes=notes,
     )
     return result.model_dump_json(indent=2)

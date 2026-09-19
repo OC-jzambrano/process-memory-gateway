@@ -45,7 +45,7 @@ from src.storage.repository import MemoryRepository
 
 
 class FakeProcessMemoryService:
-    """Deterministic fake service implementing all 5 operations with zero database or Odoo connections."""
+    """Deterministic fake service implementing the public operations without external connections."""
 
     def __init__(self):
         self.invocations: list[dict[str, Any]] = []
@@ -121,6 +121,24 @@ class FakeProcessMemoryService:
             rule_id="rule_fake_999",
             version=1,
             message="Candidate approved into active canonical memory.",
+        )
+
+    def set_canonical_rule_status(
+        self,
+        rule_id: str,
+        status: str,
+        notes: str | None = None,
+    ):
+        from src.models.schemas import CanonicalRuleStatusResult
+
+        self.invocations.append(
+            {"method": "set_canonical_rule_status", "rule_id": rule_id, "status": status, "notes": notes}
+        )
+        return CanonicalRuleStatusResult(
+            status=status,
+            rule_id=rule_id,
+            previous_status="approved" if status == "archived" else "archived",
+            message="Canonical rule status updated.",
         )
 
     def get_company_context(
@@ -233,11 +251,11 @@ def test_no_runtime_db_or_odoo_on_server_module_import():
 
 
 # =========================================================================
-# 2. Public Protocol Discovery: Exact 6 Tools
+# 2. Public Protocol Discovery: Exact 7 Tools
 # =========================================================================
 @pytest.mark.anyio
-async def test_protocol_tools_list_exact_six_allowlist():
-    """Verify MCP protocol tools/list returns exactly the six approved tools via official in-memory session."""
+async def test_protocol_tools_list_exact_seven_allowlist():
+    """Verify MCP protocol tools/list returns exactly the approved tools via official in-memory session."""
     fake_svc = FakeProcessMemoryService()
     server = create_mcp_server(service=fake_svc)
 
@@ -248,6 +266,7 @@ async def test_protocol_tools_list_exact_six_allowlist():
             "remember_company_instruction",
             "list_memory_candidates",
             "review_memory_candidate",
+            "set_canonical_rule_status",
             "get_company_context",
             "register_downstream_mcp",
             "run_downstream_request",
@@ -358,11 +377,11 @@ async def test_protocol_calling_removed_legacy_tools_returns_unknown_tool_and_ze
 
 
 # =========================================================================
-# 5. Protocol Tool Dispatch: Verify All 6 Approved Tools
+# 5. Protocol Tool Dispatch: Verify All 7 Approved Tools
 # =========================================================================
 @pytest.mark.anyio
-async def test_protocol_dispatch_all_six_approved_tools():
-    """Verify end-to-end dispatch for all 6 approved tools via MCP protocol with fake service."""
+async def test_protocol_dispatch_all_seven_approved_tools():
+    """Verify end-to-end dispatch for all approved tools via MCP protocol with fake service."""
     fake_svc = FakeProcessMemoryService()
     server = create_mcp_server(service=fake_svc)
 
@@ -403,7 +422,21 @@ async def test_protocol_dispatch_all_six_approved_tools():
         assert data3["status"] == "approved"
         assert data3["rule_id"] == "rule_fake_999"
 
-        # 4. get_company_context
+        # 4. set_canonical_rule_status
+        res4 = await session.call_tool(
+            "set_canonical_rule_status",
+            arguments={
+                "rule_id": "rule_fake_999",
+                "status": "archived",
+                "notes": "Temporarily disabled for validation",
+            },
+        )
+        assert res4.isError is not True
+        data4 = json.loads(res4.content[0].text)
+        assert data4["status"] == "archived"
+        assert data4["rule_id"] == "rule_fake_999"
+
+        # 5. get_company_context
         res4 = await session.call_tool(
             "get_company_context",
             arguments={
@@ -419,7 +452,7 @@ async def test_protocol_dispatch_all_six_approved_tools():
         assert len(data4["rules"]) == 1
         assert data4["rules"][0]["rule_id"] == "rule_fake_999"
 
-        # 5. register_downstream_mcp
+        # 6. register_downstream_mcp
         res5 = await session.call_tool(
             "register_downstream_mcp",
             arguments={
@@ -447,7 +480,7 @@ async def test_protocol_dispatch_all_six_approved_tools():
         assert data5["status"] == "registered"
         assert data5["server_id"] == "odoo-main"
 
-        # 6. run_downstream_request
+        # 7. run_downstream_request
         res6 = await session.call_tool(
             "run_downstream_request",
             arguments={
@@ -464,12 +497,13 @@ async def test_protocol_dispatch_all_six_approved_tools():
         assert data6["success"] is True
         assert data6["tool_name"] == "create_record"
 
-    # Verify all 6 dispatches reached the fake service with expected methods
+    # Verify all 7 dispatches reached the fake service with expected methods
     dispatched_methods = [inv["method"] for inv in fake_svc.invocations]
     assert dispatched_methods == [
         "remember_company_instruction",
         "list_memory_candidates",
         "review_memory_candidate",
+        "set_canonical_rule_status",
         "get_company_context",
         "register_downstream_mcp",
         "run_downstream_request",
