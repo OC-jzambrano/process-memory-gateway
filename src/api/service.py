@@ -344,13 +344,22 @@ class HostedProcessMemoryService:
         # 1. Fetch registered downstream servers for company
         registered_servers = self.repo.list_downstream_mcps(company_id=ctx.company_id)
         if downstream_hint:
-            # Filter servers by hint if provided
             filtered = [
                 s for s in registered_servers
                 if s.server_id == downstream_hint or any(t.name == downstream_hint for t in s.available_tools)
             ]
-            if filtered:
-                registered_servers = filtered
+            if not filtered:
+                return OrchestrationResult(
+                    success=False,
+                    correlation_id=cid,
+                    server_id=downstream_hint,
+                    tool_name="none",
+                    error=(
+                        f"Downstream '{downstream_hint}' is not registered for "
+                        f"company '{ctx.company_slug}'."
+                    ),
+                )
+            registered_servers = filtered
 
         if not registered_servers:
             return OrchestrationResult(

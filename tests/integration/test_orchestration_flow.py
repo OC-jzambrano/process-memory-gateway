@@ -191,3 +191,34 @@ def test_multi_tenant_downstream_isolation(multi_tenant_setup):
 
     finally:
         set_current_context(None)
+
+
+def test_downstream_hint_never_falls_back_to_another_server(multi_tenant_setup):
+    service, _repo, _observed_rule_ids = multi_tenant_setup
+    set_current_context(
+        RequestContext(
+            company_id="co_alpha",
+            company_slug="alpha",
+            user_id="user_alpha",
+            email="alpha@test.com",
+            role=RoleType.OWNER,
+        )
+    )
+    try:
+        service.register_downstream_mcp(
+            server_id="odoo-main",
+            endpoint="mock://odoo-alpha",
+            transport="internal_mock",
+            available_tools=[
+                {"name": "create_record", "input_schema": {"type": "object"}}
+            ],
+        )
+        result = service.run_downstream_request(
+            user_request="Create a baseline test record",
+            downstream_hint="odoo-test",
+        )
+        assert result.success is False
+        assert result.server_id == "odoo-test"
+        assert "not registered for company 'alpha'" in (result.error or "")
+    finally:
+        set_current_context(None)
