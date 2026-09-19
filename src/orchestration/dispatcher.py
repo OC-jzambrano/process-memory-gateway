@@ -98,12 +98,16 @@ class DownstreamDispatcher:
         password = None
 
         parsed = self._load_secret(server.secret_ref or "")
+        if server.secret_ref and parsed is None:
+            raise ValueError("downstream credentials secret could not be read")
         if isinstance(parsed, dict):
             db = parsed.get("db") or parsed.get("database") or parsed.get("ODOO_DB") or db
             login = parsed.get("login") or parsed.get("username") or parsed.get("ODOO_LOGIN")
             password = parsed.get("password") or parsed.get("api_key") or parsed.get("ODOO_PASSWORD") or parsed.get("ODOO_API_KEY")
 
         if not login or not password:
+            if server.secret_ref:
+                raise ValueError("downstream credentials secret is missing username or password")
             # Check company odoo connection configuration if present
             conn_config = self.repo.get_odoo_connection(server.company_id)
             if conn_config:
