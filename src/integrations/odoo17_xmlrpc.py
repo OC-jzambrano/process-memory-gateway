@@ -52,7 +52,6 @@ class Odoo17Connector:
     """
     Thin Odoo 17 XML-RPC connector.
     Authenticates, creates the requested Odoo record, and returns immediate XML-RPC result.
-    Zero business validation, zero DoD checking, zero read-back verification.
     """
 
     def __init__(
