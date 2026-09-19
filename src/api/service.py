@@ -21,6 +21,7 @@ from src.models.schemas import (
     ActionContext,
     CandidateResult,
     CandidateRule,
+    CanonicalRule,
     CanonicalRuleStatusResult,
     DeterministicConstraint,
     DownstreamMCPServer,
@@ -183,6 +184,35 @@ class HostedProcessMemoryService:
             else RuleStatus.PENDING_REVIEW
         )
         return self.repo.list_candidates(client_id=ctx.company_id, status=rule_status)
+
+    def list_canonical_rules(
+        self, status: str = "approved", process_name: str | None = None
+    ) -> list[CanonicalRule]:
+        """List canonical rules for audit/review without action-scope matching."""
+        ctx = get_current_context()
+        self.auth_resolver.require_role(
+            ctx,
+            [
+                RoleType.OWNER,
+                RoleType.REVIEWER,
+                RoleType.OPERATOR,
+                RoleType.AUDITOR,
+                RoleType.MEMBER,
+            ],
+        )
+        if status == "all":
+            rule_status = "all"
+        else:
+            rule_status = (
+                RuleStatus(status)
+                if status in [s.value for s in RuleStatus]
+                else RuleStatus.APPROVED
+            )
+        return self.repo.list_canonical_rules(
+            client_id=ctx.company_id,
+            status=rule_status,
+            process_name=process_name,
+        )
 
     # --- 3. REVIEW MEMORY CANDIDATE ---
     def review_memory_candidate(

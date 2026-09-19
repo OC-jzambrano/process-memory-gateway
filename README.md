@@ -17,13 +17,15 @@ OPM does not hard-code Definition of Done, acceptance criteria, project rules, o
 
 ## Public MCP tools
 
-The server exposes exactly six tools. Identity is resolved from the authenticated Cognito request.
+The server exposes exactly eight tools. Identity is resolved from the authenticated Cognito request.
 
 | Tool | Purpose |
 | --- | --- |
 | `remember_company_instruction` | Stage a natural-language instruction as `pending_review`. |
 | `list_memory_candidates` | List candidates for the authenticated company. |
+| `list_canonical_rules` | List canonical rules for audit/review without action-scope matching. |
 | `review_memory_candidate` | Approve, edit, or reject a candidate and record the audit event. |
+| `set_canonical_rule_status` | Toggle a canonical rule between `approved` and `archived`. |
 | `get_company_context` | Retrieve active rules matching an explicit action context. |
 | `register_downstream_mcp` | Configure a company-scoped downstream MCP server or adapter. |
 | `run_downstream_request` | Retrieve scoped memory, ask Bedrock for one structured tool call, validate its protocol schema, and dispatch it. |

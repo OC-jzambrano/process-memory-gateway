@@ -269,11 +269,19 @@ if (btnLogin) btnLogin.onclick = () => login().catch(err => {
   authStatus.className = 'status-badge err'; authStatus.textContent = 'Login error';
   out.innerHTML = '<p class="bad">' + err.message.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])) + '</p>';
 });
-if (btnLogout) btnLogout.onclick = () => {
+if (btnLogout) btnLogout.onclick = async () => {
   sessionStorage.removeItem('opmAccessToken');
-  authStatus.className = 'status-badge pending';
-  authStatus.textContent = 'Signed out';
-  load();
+  sessionStorage.removeItem('opmOAuthState');
+  sessionStorage.removeItem('opmPkceVerifier');
+  try {
+    const cfg = await fetch('/admin/downstreams/auth-config').then(r => r.json());
+    const params = new URLSearchParams({client_id: cfg.client_id, logout_uri: cfg.logout_uri});
+    window.location.assign(cfg.logout_endpoint + '?' + params.toString());
+  } catch {
+    authStatus.className = 'status-badge pending';
+    authStatus.textContent = 'Signed out';
+    load();
+  }
 };
 
 async function load() {
@@ -381,6 +389,8 @@ async def downstream_auth_config(request: Request) -> JSONResponse:
         "redirect_uri": f"{origin}/admin/downstreams",
         "authorization_endpoint": f"{auth_base}/oauth2/authorize",
         "token_endpoint": f"{auth_base}/oauth2/token",
+        "logout_endpoint": f"{auth_base}/logout",
+        "logout_uri": f"{origin}/admin/downstreams",
         "scope": (
             f"openid email {COGNITO_RESOURCE_SERVER_IDENTIFIER}/"
             f"{COGNITO_REQUIRED_SCOPE}"

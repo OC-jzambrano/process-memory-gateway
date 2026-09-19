@@ -69,3 +69,12 @@ variable "approved_callback_urls" {
     "https://oauth.pstmn.io/v1/callback"
   ]
 }
+
+variable "approved_logout_urls" {
+  type        = list(string)
+  description = "Approved OAuth 2.0 logout redirect URLs"
+  default = [
+    "https://sjbs8r4vg0.execute-api.eu-north-1.amazonaws.com/admin/downstreams",
+    "http://localhost:3000/logout"
+  ]
+}

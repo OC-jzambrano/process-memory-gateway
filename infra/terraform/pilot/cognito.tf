@@ -54,7 +54,7 @@ resource "aws_cognito_user_pool_client" "mcp_client" {
   ]
   supported_identity_providers = ["COGNITO"]
   callback_urls                = var.approved_callback_urls
-  logout_urls                  = ["http://localhost:3000/logout"]
+  logout_urls                  = var.approved_logout_urls
 
   token_validity_units {
     access_token  = "hours"

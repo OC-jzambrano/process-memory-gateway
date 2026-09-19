@@ -1055,32 +1055,55 @@ class MemoryRepository(BaseRepository):
             rows = cursor.execute(query, params).fetchall()
             results = []
             for r in rows:
-                d = dict(r)
-                rule = CanonicalRule(
-                    rule_id=d["rule_id"],
-                    client_id=d["client_id"],
-                    process_name=d.get("process_name") or "general",
-                    rule_text=d["rule_text"],
-                    rule_type=d["rule_type"],
-                    severity=d["severity"],
-                    enforcement_mode=d["enforcement_mode"],
-                    version=d["version"],
-                    status=d["status"],
-                    source_candidate_id=d.get("source_candidate_id"),
-                    replaced_by_rule_id=d.get("replaced_by_rule_id"),
-                    structured_scope=self._deserialize_scope(
-                        d.get("structured_scope_json")
-                    ),
-                    structured_constraint=self._deserialize_constraint(
-                        d.get("structured_constraint_json")
-                    ),
-                    approved_by=d["approved_by"],
-                    approved_at=d.get("approved_at"),
-                    created_at=d.get("created_at"),
-                    updated_at=d.get("updated_at"),
-                )
-                results.append(rule)
+                results.append(self._parse_canonical_rule_row(dict(r)))
             return results
+
+    def list_canonical_rules(
+        self,
+        client_id: str,
+        status: RuleStatus | str | None = RuleStatus.APPROVED,
+        process_name: str | None = None,
+    ) -> list[CanonicalRule]:
+        with db_session(self.db_path) as conn:
+            cursor = conn.cursor()
+            query = "SELECT * FROM canonical_rules WHERE client_id = ?"
+            params = [client_id]
+
+            status_value = status.value if isinstance(status, RuleStatus) else status
+            if status_value and status_value != "all":
+                query += " AND status = ?"
+                params.append(status_value)
+
+            if process_name and process_name != "all":
+                query += " AND (process_name = ? OR process_name = 'general')"
+                params.append(process_name)
+
+            query += " ORDER BY status ASC, version DESC, created_at DESC"
+            rows = cursor.execute(query, params).fetchall()
+            return [self._parse_canonical_rule_row(dict(r)) for r in rows]
+
+    def _parse_canonical_rule_row(self, d: dict[str, Any]) -> CanonicalRule:
+        return CanonicalRule(
+            rule_id=d["rule_id"],
+            client_id=d["client_id"],
+            process_name=d.get("process_name") or "general",
+            rule_text=d["rule_text"],
+            rule_type=d["rule_type"],
+            severity=d["severity"],
+            enforcement_mode=d["enforcement_mode"],
+            version=d["version"],
+            status=d["status"],
+            source_candidate_id=d.get("source_candidate_id"),
+            replaced_by_rule_id=d.get("replaced_by_rule_id"),
+            structured_scope=self._deserialize_scope(d.get("structured_scope_json")),
+            structured_constraint=self._deserialize_constraint(
+                d.get("structured_constraint_json")
+            ),
+            approved_by=d["approved_by"],
+            approved_at=d.get("approved_at"),
+            created_at=d.get("created_at"),
+            updated_at=d.get("updated_at"),
+        )
 
     # --- 6. DOWNSTREAM MCP SERVERS REGISTRY ---
     def upsert_downstream_mcp(

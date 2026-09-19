@@ -3,14 +3,15 @@
 When acting as an AI coding agent or assistant (Codex, Claude, Antigravity, or Cursor), follow these operational guidelines:
 
 ## 1. Process Memory & MCP Orchestration (Public MCP Surface)
-- **Approved Public MCP Tools (7 Only):**
+- **Approved Public MCP Tools (8 Only):**
   1. `remember_company_instruction`: Stage proposed operational rules, conventions, or constraints from dialogue as `pending_review`.
   2. `list_memory_candidates`: List staged candidates awaiting human review for the authenticated company.
-  3. `review_memory_candidate`: Submit owner/reviewer decision (`approve`, `edit`, `reject`) to promote candidates into active canonical rules.
-  4. `get_company_context`: Retrieve approved active canonical policies (`MemoryPack`) for the target system and action scope.
-  5. `register_downstream_mcp`: Configure downstream MCP servers/adapters, schemas, and supported action contexts per company.
-  6. `run_downstream_request`: Safe orchestration entrypoint that injects approved company memory into the Bedrock prompt, requires a structured tool call, validates schemas, and invokes downstream tools.
-  7. `set_canonical_rule_status`: Owner/reviewer-controlled toggle between `approved` and `archived`; archived rules are excluded from Memory Packs and prompts.
+  3. `list_canonical_rules`: List canonical rules for audit/review without action-scope matching.
+  4. `review_memory_candidate`: Submit owner/reviewer decision (`approve`, `edit`, `reject`) to promote candidates into active canonical rules.
+  5. `get_company_context`: Retrieve approved active canonical policies (`MemoryPack`) for the target system and action scope.
+  6. `register_downstream_mcp`: Configure downstream MCP servers/adapters, schemas, and supported action contexts per company.
+  7. `run_downstream_request`: Safe orchestration entrypoint that injects approved company memory into the Bedrock prompt, requires a structured tool call, validates schemas, and invokes downstream tools.
+  8. `set_canonical_rule_status`: Owner/reviewer-controlled toggle between `approved` and `archived`; archived rules are excluded from Memory Packs and prompts.
 - **Server-Resolved Identity & Clean Signatures:**
   - Never supply caller-controlled identity arguments (`client_id`, `company_id`, `reviewer`, `role`) to public MCP tools.
   - All tenant and user context is resolved cryptographically by the server from the Cognito OAuth 2.0 Bearer token.

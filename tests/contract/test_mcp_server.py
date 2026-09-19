@@ -8,11 +8,13 @@ from mcp.shared.memory import create_connected_server_and_client_session
 from server import (
     create_mcp_server,
     get_company_context,
+    list_canonical_rules,
     list_memory_candidates,
     register_downstream_mcp,
     remember_company_instruction,
     review_memory_candidate,
     run_downstream_request,
+    set_canonical_rule_status,
 )
 from src.api.auth_context import RequestContext, set_current_context
 from src.api.memory_tools import ProcessMemoryTools
@@ -26,11 +28,13 @@ from src.models.enums import (
     RoleType,
     RuleStatus,
     RuleType,
+    Severity,
 )
 from src.models.schemas import (
     ActionContext,
     CandidateResult,
     CandidateRule,
+    CanonicalRule,
     Company,
     DeterministicConstraint,
     Membership,
@@ -86,6 +90,37 @@ class FakeProcessMemoryService:
                 source_quote="Every task must have acceptance criteria.",
                 confidence=0.95,
                 status=RuleStatus.PENDING_REVIEW,
+            )
+        ]
+
+    def list_canonical_rules(
+        self, status: str = "approved", process_name: str | None = None
+    ) -> list[CanonicalRule]:
+        self.invocations.append(
+            {
+                "method": "list_canonical_rules",
+                "status": status,
+                "process_name": process_name,
+            }
+        )
+        return [
+            CanonicalRule(
+                rule_id="rule_fake_999",
+                client_id="co_fake",
+                process_name="general",
+                rule_text="Every task must have acceptance criteria.",
+                rule_type=RuleType.OPERATIONAL_CONSTRAINT,
+                severity=Severity.INFO,
+                enforcement_mode=EnforcementMode.BLOCKING,
+                version=1,
+                status=RuleStatus.APPROVED,
+                structured_scope=ActionContext(
+                    system="odoo",
+                    application="project",
+                    resource="project.task",
+                    operation="create",
+                ),
+                approved_by="reviewer_fake",
             )
         ]
 
@@ -251,10 +286,10 @@ def test_no_runtime_db_or_odoo_on_server_module_import():
 
 
 # =========================================================================
-# 2. Public Protocol Discovery: Exact 7 Tools
+# 2. Public Protocol Discovery: Exact 8 Tools
 # =========================================================================
 @pytest.mark.anyio
-async def test_protocol_tools_list_exact_seven_allowlist():
+async def test_protocol_tools_list_exact_eight_allowlist():
     """Verify MCP protocol tools/list returns exactly the approved tools via official in-memory session."""
     fake_svc = FakeProcessMemoryService()
     server = create_mcp_server(service=fake_svc)
@@ -265,6 +300,7 @@ async def test_protocol_tools_list_exact_seven_allowlist():
         expected_names = {
             "remember_company_instruction",
             "list_memory_candidates",
+            "list_canonical_rules",
             "review_memory_candidate",
             "set_canonical_rule_status",
             "get_company_context",
@@ -377,10 +413,10 @@ async def test_protocol_calling_removed_legacy_tools_returns_unknown_tool_and_ze
 
 
 # =========================================================================
-# 5. Protocol Tool Dispatch: Verify All 7 Approved Tools
+# 5. Protocol Tool Dispatch: Verify All 8 Approved Tools
 # =========================================================================
 @pytest.mark.anyio
-async def test_protocol_dispatch_all_seven_approved_tools():
+async def test_protocol_dispatch_all_eight_approved_tools():
     """Verify end-to-end dispatch for all approved tools via MCP protocol with fake service."""
     fake_svc = FakeProcessMemoryService()
     server = create_mcp_server(service=fake_svc)
@@ -408,8 +444,17 @@ async def test_protocol_dispatch_all_seven_approved_tools():
         assert len(data2) == 1
         assert data2[0]["candidate_id"] == "cand_fake_123"
 
-        # 3. review_memory_candidate
+        # 3. list_canonical_rules
         res3 = await session.call_tool(
+            "list_canonical_rules", arguments={"status": "approved"}
+        )
+        assert res3.isError is not True
+        data3 = json.loads(res3.content[0].text)
+        assert len(data3) == 1
+        assert data3[0]["rule_id"] == "rule_fake_999"
+
+        # 4. review_memory_candidate
+        res4 = await session.call_tool(
             "review_memory_candidate",
             arguments={
                 "candidate_id": "cand_fake_123",
@@ -417,13 +462,13 @@ async def test_protocol_dispatch_all_seven_approved_tools():
                 "notes": "Approved by owner",
             },
         )
-        assert res3.isError is not True
-        data3 = json.loads(res3.content[0].text)
-        assert data3["status"] == "approved"
-        assert data3["rule_id"] == "rule_fake_999"
+        assert res4.isError is not True
+        data4 = json.loads(res4.content[0].text)
+        assert data4["status"] == "approved"
+        assert data4["rule_id"] == "rule_fake_999"
 
-        # 4. set_canonical_rule_status
-        res4 = await session.call_tool(
+        # 5. set_canonical_rule_status
+        res5 = await session.call_tool(
             "set_canonical_rule_status",
             arguments={
                 "rule_id": "rule_fake_999",
@@ -431,13 +476,13 @@ async def test_protocol_dispatch_all_seven_approved_tools():
                 "notes": "Temporarily disabled for validation",
             },
         )
-        assert res4.isError is not True
-        data4 = json.loads(res4.content[0].text)
-        assert data4["status"] == "archived"
-        assert data4["rule_id"] == "rule_fake_999"
+        assert res5.isError is not True
+        data5 = json.loads(res5.content[0].text)
+        assert data5["status"] == "archived"
+        assert data5["rule_id"] == "rule_fake_999"
 
-        # 5. get_company_context
-        res4 = await session.call_tool(
+        # 6. get_company_context
+        res6 = await session.call_tool(
             "get_company_context",
             arguments={
                 "system": "odoo",
@@ -447,13 +492,13 @@ async def test_protocol_dispatch_all_seven_approved_tools():
                 "fields": ["definition_of_done"],
             },
         )
-        assert res4.isError is not True
-        data4 = json.loads(res4.content[0].text)
-        assert len(data4["rules"]) == 1
-        assert data4["rules"][0]["rule_id"] == "rule_fake_999"
+        assert res6.isError is not True
+        data6 = json.loads(res6.content[0].text)
+        assert len(data6["rules"]) == 1
+        assert data6["rules"][0]["rule_id"] == "rule_fake_999"
 
-        # 6. register_downstream_mcp
-        res5 = await session.call_tool(
+        # 7. register_downstream_mcp
+        res7 = await session.call_tool(
             "register_downstream_mcp",
             arguments={
                 "server_id": "odoo-main",
@@ -475,13 +520,13 @@ async def test_protocol_dispatch_all_seven_approved_tools():
                 ],
             },
         )
-        assert res5.isError is not True
-        data5 = json.loads(res5.content[0].text)
-        assert data5["status"] == "registered"
-        assert data5["server_id"] == "odoo-main"
+        assert res7.isError is not True
+        data7 = json.loads(res7.content[0].text)
+        assert data7["status"] == "registered"
+        assert data7["server_id"] == "odoo-main"
 
-        # 7. run_downstream_request
-        res6 = await session.call_tool(
+        # 8. run_downstream_request
+        res8 = await session.call_tool(
             "run_downstream_request",
             arguments={
                 "user_request": "Create a task for bug fix",
@@ -492,16 +537,17 @@ async def test_protocol_dispatch_all_seven_approved_tools():
                 },
             },
         )
-        assert res6.isError is not True
-        data6 = json.loads(res6.content[0].text)
-        assert data6["success"] is True
-        assert data6["tool_name"] == "create_record"
+        assert res8.isError is not True
+        data8 = json.loads(res8.content[0].text)
+        assert data8["success"] is True
+        assert data8["tool_name"] == "create_record"
 
-    # Verify all 7 dispatches reached the fake service with expected methods
+    # Verify all 8 dispatches reached the fake service with expected methods
     dispatched_methods = [inv["method"] for inv in fake_svc.invocations]
     assert dispatched_methods == [
         "remember_company_instruction",
         "list_memory_candidates",
+        "list_canonical_rules",
         "review_memory_candidate",
         "set_canonical_rule_status",
         "get_company_context",
@@ -530,7 +576,9 @@ async def test_regression_sensitivity_fails_when_legacy_tool_registered():
         expected_names = {
             "remember_company_instruction",
             "list_memory_candidates",
+            "list_canonical_rules",
             "review_memory_candidate",
+            "set_canonical_rule_status",
             "get_company_context",
             "register_downstream_mcp",
             "run_downstream_request",
@@ -642,8 +690,8 @@ def clean_context(tmp_path, monkeypatch):
     svc.orchestrator = old_orchestrator
 
 
-def test_public_six_tools_lifecycle(clean_context):
-    """Verify end-to-end execution of the 6 public tools."""
+def test_public_eight_tools_lifecycle(clean_context):
+    """Verify end-to-end execution of the 8 public tools."""
     # 1. remember_company_instruction
     stage_json = remember_company_instruction(
         instruction_text="Every task must have acceptance criteria."
@@ -663,7 +711,30 @@ def test_public_six_tools_lifecycle(clean_context):
     assert review_data["status"] == "approved"
     assert review_data["rule_id"] is not None
 
-    # 4. get_company_context
+    # 4. list_canonical_rules
+    canonical_json = list_canonical_rules(status="approved")
+    canonical = json.loads(canonical_json)
+    assert len(canonical) >= 1
+    assert canonical[0]["rule_id"] == review_data["rule_id"]
+
+    # 5. set_canonical_rule_status
+    archived_json = set_canonical_rule_status(
+        rule_id=review_data["rule_id"],
+        status="archived",
+        notes="Lifecycle status toggle check.",
+    )
+    archived = json.loads(archived_json)
+    assert archived["status"] == "archived"
+
+    restored_json = set_canonical_rule_status(
+        rule_id=review_data["rule_id"],
+        status="approved",
+        notes="Restore for scoped context retrieval.",
+    )
+    restored = json.loads(restored_json)
+    assert restored["status"] == "approved"
+
+    # 6. get_company_context
     context_json = get_company_context(
         system="odoo",
         application="project",
@@ -673,7 +744,7 @@ def test_public_six_tools_lifecycle(clean_context):
     context_data = json.loads(context_json)
     assert len(context_data["rules"]) >= 1
 
-    # 5. register_downstream_mcp
+    # 7. register_downstream_mcp
     reg_json = register_downstream_mcp(
         server_id="test_server",
         endpoint="mock://test",
@@ -696,7 +767,7 @@ def test_public_six_tools_lifecycle(clean_context):
     reg_data = json.loads(reg_json)
     assert reg_data["status"] == "registered"
 
-    # 6. run_downstream_request
+    # 8. run_downstream_request
     req_json = run_downstream_request(
         user_request="Create a task for bug fix",
         action_context={"system": "odoo", "resource": "work.item", "operation": "create"},

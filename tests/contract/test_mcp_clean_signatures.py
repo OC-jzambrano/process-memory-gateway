@@ -7,6 +7,7 @@ import inspect
 import server
 from server import (
     get_company_context,
+    list_canonical_rules,
     list_memory_candidates,
     register_downstream_mcp,
     remember_company_instruction,
@@ -35,6 +36,7 @@ def test_public_mcp_tools_contain_no_caller_controlled_identity_args():
     tools = [
         remember_company_instruction,
         list_memory_candidates,
+        list_canonical_rules,
         review_memory_candidate,
         set_canonical_rule_status,
         get_company_context,

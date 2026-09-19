@@ -15,6 +15,7 @@ __all__ = [
     "get_company_context",
     "get_default_server",
     "get_default_service",
+    "list_canonical_rules",
     "list_memory_candidates",
     "register_downstream_mcp",
     "register_tools",
@@ -86,7 +87,31 @@ def register_tools(mcp_app: FastMCP, service: Any) -> None:
         candidates = service.list_memory_candidates(status=status)
         return json.dumps([c.model_dump() for c in candidates], indent=2)
 
-    # --- TOOL 3: REVIEW MEMORY CANDIDATE ---
+    # --- TOOL 3: LIST CANONICAL RULES ---
+    @mcp_app.tool()
+    def list_canonical_rules(
+        status: Literal["approved", "archived", "all"] = "approved",
+        process_name: str | None = None,
+    ) -> str:
+        """
+        Lists canonical rules for the authenticated company without action-scope matching.
+        Use this for audits, consoles, and agent inspection. Use get_company_context
+        for scoped execution memory.
+
+        Args:
+            status: Canonical rule status filter: 'approved', 'archived', or 'all'.
+            process_name: Optional process filter; use 'all' or omit for every process.
+
+        Returns:
+            JSON string containing canonical rules with scopes, constraints, versions, and status.
+        """
+        rules = service.list_canonical_rules(
+            status=status,
+            process_name=process_name,
+        )
+        return json.dumps([r.model_dump(mode="json") for r in rules], indent=2)
+
+    # --- TOOL 4: REVIEW MEMORY CANDIDATE ---
     @mcp_app.tool()
     def review_memory_candidate(
         candidate_id: str,
@@ -122,7 +147,7 @@ def register_tools(mcp_app: FastMCP, service: Any) -> None:
         )
         return result.model_dump_json(indent=2)
 
-    # --- TOOL 4: SET CANONICAL RULE STATUS ---
+    # --- TOOL 5: SET CANONICAL RULE STATUS ---
     @mcp_app.tool()
     def set_canonical_rule_status(
         rule_id: str,
@@ -150,7 +175,7 @@ def register_tools(mcp_app: FastMCP, service: Any) -> None:
         )
         return result.model_dump_json(indent=2)
 
-    # --- TOOL 5: GET COMPANY CONTEXT (MEMORY PACK) ---
+    # --- TOOL 6: GET COMPANY CONTEXT (MEMORY PACK) ---
     @mcp_app.tool()
     def get_company_context(
         system: str | None = None,
@@ -181,7 +206,7 @@ def register_tools(mcp_app: FastMCP, service: Any) -> None:
         )
         return pack.model_dump_json(indent=2)
 
-    # --- TOOL 6: REGISTER DOWNSTREAM MCP SERVER ---
+    # --- TOOL 7: REGISTER DOWNSTREAM MCP SERVER ---
     @mcp_app.tool()
     def register_downstream_mcp(
         server_id: str,
@@ -215,7 +240,7 @@ def register_tools(mcp_app: FastMCP, service: Any) -> None:
         )
         return result.model_dump_json(indent=2)
 
-    # --- TOOL 7: RUN DOWNSTREAM REQUEST (ORCHESTRATION ENTRYPOINT) ---
+    # --- TOOL 8: RUN DOWNSTREAM REQUEST (ORCHESTRATION ENTRYPOINT) ---
     @mcp_app.tool()
     def run_downstream_request(
         user_request: str,
@@ -288,6 +313,17 @@ def remember_company_instruction(
 def list_memory_candidates(status: str = "pending_review") -> str:
     candidates = get_default_service().list_memory_candidates(status=status)
     return json.dumps([c.model_dump() for c in candidates], indent=2)
+
+
+def list_canonical_rules(
+    status: Literal["approved", "archived", "all"] = "approved",
+    process_name: str | None = None,
+) -> str:
+    rules = get_default_service().list_canonical_rules(
+        status=status,
+        process_name=process_name,
+    )
+    return json.dumps([r.model_dump(mode="json") for r in rules], indent=2)
 
 
 def review_memory_candidate(

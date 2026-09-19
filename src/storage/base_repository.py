@@ -91,6 +91,14 @@ class BaseRepository(ABC):
     ) -> list[CanonicalRule]: ...
 
     @abstractmethod
+    def list_canonical_rules(
+        self,
+        client_id: str,
+        status: RuleStatus | str | None = RuleStatus.APPROVED,
+        process_name: str | None = None,
+    ) -> list[CanonicalRule]: ...
+
+    @abstractmethod
     def create_canonical_rule(self, rule: CanonicalRule) -> CanonicalRule: ...
 
     @abstractmethod
