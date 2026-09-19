@@ -310,7 +310,7 @@ def test_dispatcher_resolves_aws_secret_for_odoo(tmp_path, monkeypatch):
             assert SecretId.endswith(":odoo")
             return {"SecretString": '{"database":"db1","username":"u1","password":"p1"}'}
 
-    monkeypatch.setattr("boto3.client", lambda service: FakeSecrets())
+    monkeypatch.setattr("boto3.client", lambda service, **kwargs: FakeSecrets())
     dispatcher = DownstreamDispatcher(repo=repo)
     connector = dispatcher._resolve_odoo_connector(repo.get_downstream_mcp("co_secret", "odoo"))
     assert connector.db == "db1"
@@ -338,7 +338,7 @@ def test_dispatcher_derives_odoo_db_from_hosted_url_when_secret_omits_db(tmp_pat
             assert SecretId.endswith(":odoo")
             return {"SecretString": '{"username":"u1","password":"p1"}'}
 
-    monkeypatch.setattr("boto3.client", lambda service: FakeSecrets())
+    monkeypatch.setattr("boto3.client", lambda service, **kwargs: FakeSecrets())
     dispatcher = DownstreamDispatcher(repo=repo)
     connector = dispatcher._resolve_odoo_connector(repo.get_downstream_mcp("co_secret", "odoo"))
     assert connector.db == "acme"
@@ -366,7 +366,7 @@ def test_dispatcher_does_not_guess_odoo_db_for_custom_domain(tmp_path, monkeypat
             assert SecretId.endswith(":odoo")
             return {"SecretString": '{"username":"u1","password":"p1"}'}
 
-    monkeypatch.setattr("boto3.client", lambda service: FakeSecrets())
+    monkeypatch.setattr("boto3.client", lambda service, **kwargs: FakeSecrets())
     dispatcher = DownstreamDispatcher(repo=repo)
     with pytest.raises(ValueError, match="Odoo database name is required"):
         dispatcher._resolve_odoo_connector(repo.get_downstream_mcp("co_secret", "odoo"))

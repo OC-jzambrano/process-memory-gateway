@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 
 import anyio
 
+from src.config import AWS_REGION
 from src.integrations.odoo17_xmlrpc import Odoo17Connector, _sanitize_error_message
 from src.models.enums import MCPTransport
 from src.models.schemas import (
@@ -140,7 +141,7 @@ class DownstreamDispatcher:
             if secret_ref.startswith("arn:"):
                 import boto3
 
-                value = boto3.client("secretsmanager").get_secret_value(
+                value = boto3.client("secretsmanager", region_name=AWS_REGION).get_secret_value(
                     SecretId=secret_ref
                 ).get("SecretString")
             else:
