@@ -22,6 +22,7 @@ from src.config import (
     COGNITO_DOMAIN,
     COGNITO_REGION,
     COGNITO_REQUIRED_SCOPE,
+    COGNITO_RESOURCE_SERVER_IDENTIFIER,
     COGNITO_USER_POOL_ID,
     DATA_DIR,
     DOMAIN_NAME,
@@ -364,8 +365,11 @@ async def downstream_ui(request: Request) -> HTMLResponse:
 
 async def downstream_auth_config(request: Request) -> JSONResponse:
     """Return public Cognito OAuth metadata needed by the browser PKCE client."""
-    host = request.headers.get("x-forwarded-host", request.headers.get("host", DOMAIN_NAME))
-    proto = request.headers.get("x-forwarded-proto", "https" if host != "localhost" else "http")
+    host = request.headers.get(
+        "x-opm-public-host",
+        request.headers.get("x-forwarded-host", request.headers.get("host", DOMAIN_NAME)),
+    )
+    proto = "http" if host in {"localhost", "127.0.0.1"} else "https"
     origin = f"{proto}://{host}"
     auth_base = COGNITO_DOMAIN or (
         f"https://cognito-idp.{COGNITO_REGION}.amazonaws.com/{COGNITO_USER_POOL_ID}"
@@ -377,7 +381,10 @@ async def downstream_auth_config(request: Request) -> JSONResponse:
         "redirect_uri": f"{origin}/admin/downstreams",
         "authorization_endpoint": f"{auth_base}/oauth2/authorize",
         "token_endpoint": f"{auth_base}/oauth2/token",
-        "scope": f"openid email {COGNITO_REQUIRED_SCOPE}",
+        "scope": (
+            f"openid email {COGNITO_RESOURCE_SERVER_IDENTIFIER}/"
+            f"{COGNITO_REQUIRED_SCOPE}"
+        ),
     })
 
 
