@@ -90,7 +90,20 @@ resource "aws_iam_policy" "app_policy" {
           Action   = ["secretsmanager:GetSecretValue"]
           Resource = var.odoo_secret_arn
         }
-      ] : []
+      ] : [],
+      [
+        {
+          Sid    = "SecretsManagerDownstreamCredentials"
+          Effect = "Allow"
+          Action = [
+            "secretsmanager:CreateSecret",
+            "secretsmanager:UpdateSecret",
+            "secretsmanager:GetSecretValue",
+            "secretsmanager:DescribeSecret"
+          ]
+          Resource = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:opm/downstream/*"
+        }
+      ]
     )
   })
 }
