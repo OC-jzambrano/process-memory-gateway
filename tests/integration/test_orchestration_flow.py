@@ -187,7 +187,7 @@ def test_multi_tenant_downstream_isolation(multi_tenant_setup):
             downstream_hint="odoo-alpha-secret",
         )
         assert result.success is False
-        assert "No downstream MCP servers registered for company 'co_beta'" in (result.error or "")
+        assert "not registered for company 'beta'" in (result.error or "")
 
     finally:
         set_current_context(None)
