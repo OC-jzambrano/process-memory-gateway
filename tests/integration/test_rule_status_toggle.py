@@ -37,3 +37,6 @@ def test_rule_status_toggle_rejects_invalid_or_repeated_transitions(repo, make_c
 
     with pytest.raises(ValueError, match="already 'approved'"):
         repo.set_rule_status(rule.rule_id, "approved", "owner", "test_client")
+
+    with pytest.raises(ValueError, match="client_id is required"):
+        repo.set_rule_status(rule.rule_id, "archived", "owner")

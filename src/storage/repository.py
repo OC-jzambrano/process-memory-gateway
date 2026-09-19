@@ -944,6 +944,9 @@ class MemoryRepository(BaseRepository):
         client_id: str | None = None,
         notes: str | None = None,
     ) -> CanonicalRule:
+        if not client_id:
+            raise ValueError("client_id is required to change canonical rule status.")
+
         target_status = RuleStatus(status)
         if target_status not in (RuleStatus.APPROVED, RuleStatus.ARCHIVED):
             raise ValueError("Canonical rules may only be toggled to 'approved' or 'archived'.")
@@ -978,10 +981,14 @@ class MemoryRepository(BaseRepository):
                 )
 
             with conn:
-                conn.execute(
+                cur = conn.execute(
                     "UPDATE canonical_rules SET status = ?, updated_at = ? WHERE rule_id = ? AND status = ?",
                     (target_status.value, now, rule_id, previous_status.value),
                 )
+                if cur.rowcount != 1:
+                    raise ValueError(
+                        f"Rule '{rule_id}' status transition conflicted with another update."
+                    )
                 conn.execute(
                     """
                     INSERT INTO review_events
