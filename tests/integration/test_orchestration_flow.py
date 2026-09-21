@@ -222,3 +222,198 @@ def test_downstream_hint_never_falls_back_to_another_server(multi_tenant_setup):
         assert "not registered for company 'alpha'" in (result.error or "")
     finally:
         set_current_context(None)
+
+
+def test_odoo_xmlrpc_registration_defaults_tools_when_ui_omits_allowlist(multi_tenant_setup):
+    service, repo, _observed_rule_ids = multi_tenant_setup
+    set_current_context(
+        RequestContext(
+            company_id="co_alpha",
+            company_slug="alpha",
+            user_id="user_alpha",
+            email="alpha@test.com",
+            role=RoleType.OWNER,
+        )
+    )
+    try:
+        result = service.register_downstream_mcp(
+            server_id="odoo",
+            endpoint="https://community.odooconcept.com",
+            transport="odoo_xmlrpc",
+            secret_ref="arn:aws:secretsmanager:eu-north-1:123:secret:opm/downstream/alpha/odoo",
+        )
+
+        assert result.tool_count == 2
+        server = repo.get_downstream_mcp("co_alpha", "odoo")
+        assert server is not None
+        assert [tool.name for tool in server.available_tools] == [
+            "create_record",
+            "execute_kw",
+        ]
+    finally:
+        set_current_context(None)
+
+
+def test_structured_json_fallback_dispatches_when_orchestrator_unavailable(tmp_path):
+    repo = MemoryRepository(db_path=tmp_path / "fallback_flow.db")
+    repo.upsert_company(
+        Company(
+            company_id="co_alpha",
+            company_slug="alpha",
+            name="Alpha Corp",
+            status=CompanyStatus.ACTIVE,
+        )
+    )
+    repo.upsert_user(
+        User(
+            user_id="user_alpha",
+            email="alpha@test.com",
+            name="Alpha Owner",
+            status="active",
+        )
+    )
+    repo.upsert_membership(
+        Membership(
+            membership_id="m_alpha",
+            company_id="co_alpha",
+            user_id="user_alpha",
+            role=RoleType.OWNER,
+            status=MembershipStatus.ACTIVE,
+        )
+    )
+
+    def failing_orchestrator(**_kwargs):
+        raise RuntimeError("Bedrock unavailable")
+
+    service = HostedProcessMemoryService(
+        repo=repo,
+        orchestrator=BedrockOrchestrator(mock_handler=failing_orchestrator),
+    )
+    set_current_context(
+        RequestContext(
+            company_id="co_alpha",
+            company_slug="alpha",
+            user_id="user_alpha",
+            email="alpha@test.com",
+            role=RoleType.OWNER,
+        )
+    )
+    try:
+        service.register_downstream_mcp(
+            server_id="odoo",
+            endpoint="mock://odoo-alpha",
+            transport="internal_mock",
+            available_tools=[
+                {
+                    "name": "create_record",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "model": {"type": "string"},
+                            "values": {"type": "object"},
+                        },
+                        "required": ["model", "values"],
+                    },
+                }
+            ],
+        )
+        result = service.run_downstream_request(
+            user_request='{"model":"project.task","values":{"name":"Fix UI bug"}}',
+            action_context=ActionContext(
+                system="odoo",
+                application="project",
+                resource="project.task",
+                operation="create",
+            ),
+            downstream_hint="odoo",
+        )
+
+        assert result.success is True
+        assert result.tool_name == "create_record"
+        assert result.result["received_arguments"] == {
+            "model": "project.task",
+            "values": {"name": "Fix UI bug"},
+        }
+        assert result.metadata["orchestration_fallback"] == "structured_json"
+    finally:
+        set_current_context(None)
+
+
+def test_structured_json_fallback_respects_downstream_hint_scope(tmp_path):
+    repo = MemoryRepository(db_path=tmp_path / "fallback_hint_scope.db")
+    repo.upsert_company(
+        Company(
+            company_id="co_alpha",
+            company_slug="alpha",
+            name="Alpha Corp",
+            status=CompanyStatus.ACTIVE,
+        )
+    )
+    repo.upsert_user(
+        User(
+            user_id="user_alpha",
+            email="alpha@test.com",
+            name="Alpha Owner",
+            status="active",
+        )
+    )
+    repo.upsert_membership(
+        Membership(
+            membership_id="m_alpha",
+            company_id="co_alpha",
+            user_id="user_alpha",
+            role=RoleType.OWNER,
+            status=MembershipStatus.ACTIVE,
+        )
+    )
+
+    def failing_orchestrator(**_kwargs):
+        raise RuntimeError("Bedrock unavailable")
+
+    service = HostedProcessMemoryService(
+        repo=repo,
+        orchestrator=BedrockOrchestrator(mock_handler=failing_orchestrator),
+    )
+    set_current_context(
+        RequestContext(
+            company_id="co_alpha",
+            company_slug="alpha",
+            user_id="user_alpha",
+            email="alpha@test.com",
+            role=RoleType.OWNER,
+        )
+    )
+    try:
+        for server_id in ("odoo-prod", "odoo-staging"):
+            service.register_downstream_mcp(
+                server_id=server_id,
+                endpoint=f"mock://{server_id}",
+                transport="internal_mock",
+                available_tools=[
+                    {
+                        "name": "create_record",
+                        "input_schema": {
+                            "type": "object",
+                            "properties": {
+                                "model": {"type": "string"},
+                                "values": {"type": "object"},
+                            },
+                            "required": ["model", "values"],
+                        },
+                    }
+                ],
+            )
+
+        result = service.run_downstream_request(
+            user_request=(
+                '{"server_id":"odoo-staging","tool_name":"create_record",'
+                '"arguments":{"model":"project.task","values":{"name":"Wrong target"}}}'
+            ),
+            downstream_hint="odoo-prod",
+        )
+
+        assert result.success is False
+        assert result.server_id == "odoo-prod"
+        assert result.tool_name == "orchestration_failed"
+    finally:
+        set_current_context(None)

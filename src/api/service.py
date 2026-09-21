@@ -1,3 +1,4 @@
+import json
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -31,12 +32,44 @@ from src.models.schemas import (
     OrchestrationResult,
     RegisterDownstreamMCPResult,
     ReviewResult,
+    OrchestrationToolCall,
 )
 from src.orchestration.bedrock_orchestrator import BedrockOrchestrator
 from src.orchestration.dispatcher import DownstreamDispatcher
 from src.storage.base_repository import BaseRepository
 
 logger = logging.getLogger(__name__)
+
+
+def _default_odoo_xmlrpc_tools() -> list[DownstreamToolDefinition]:
+    return [
+        DownstreamToolDefinition(
+            name="create_record",
+            description="Create an Odoo record via XML-RPC using explicit model and values arguments.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "model": {"type": "string"},
+                    "values": {"type": "object"},
+                },
+                "required": ["model", "values"],
+            },
+        ),
+        DownstreamToolDefinition(
+            name="execute_kw",
+            description="Execute an Odoo model method via XML-RPC using explicit model, method, args, and kwargs.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "model": {"type": "string"},
+                    "method": {"type": "string"},
+                    "args": {"type": "array"},
+                    "kwargs": {"type": "object"},
+                },
+                "required": ["model", "method"],
+            },
+        ),
+    ]
 
 
 class HostedProcessMemoryService:
@@ -355,6 +388,8 @@ class HostedProcessMemoryService:
             transport_enum = MCPTransport(transport)
         except ValueError:
             pass
+        if transport_enum == MCPTransport.ODOO_XMLRPC and not parsed_tools:
+            parsed_tools = _default_odoo_xmlrpc_tools()
 
         server = DownstreamMCPServer(
             company_id=ctx.company_id,
@@ -468,6 +503,23 @@ class HostedProcessMemoryService:
             )
         except Exception as e:  # noqa: BLE001 - Catch all orchestration exceptions to return typed OrchestrationResult
             logger.error("Bedrock orchestration error: %s", e)
+            fallback_call = self._try_structured_fallback_tool_call(
+                user_request=user_request,
+                registered_servers=registered_servers,
+                downstream_hint=downstream_hint,
+            )
+            if fallback_call:
+                result = self.dispatcher.dispatch(
+                    company_id=ctx.company_id,
+                    tool_call=fallback_call,
+                    correlation_id=cid,
+                )
+                result.metadata = {
+                    **result.metadata,
+                    "orchestration_fallback": "structured_json",
+                    "orchestration_error": str(e),
+                }
+                return result
             return OrchestrationResult(
                 success=False,
                 correlation_id=cid,
@@ -482,3 +534,87 @@ class HostedProcessMemoryService:
             tool_call=tool_call,
             correlation_id=cid,
         )
+
+    def _try_structured_fallback_tool_call(
+        self,
+        user_request: str,
+        registered_servers: list[DownstreamMCPServer],
+        downstream_hint: str | None = None,
+    ) -> OrchestrationToolCall | None:
+        """
+        Deterministic escape hatch for agents that already know the exact downstream call.
+        This keeps explicit operational calls working during transient LLM outages.
+        """
+        payload = self._extract_json_object(user_request)
+        if not isinstance(payload, dict):
+            return None
+
+        if {"server_id", "tool_name", "arguments"} <= set(payload):
+            server_id = str(payload["server_id"])
+            allowed_server = next(
+                (s for s in registered_servers if s.server_id == server_id), None
+            )
+            if not allowed_server:
+                return None
+            arguments = payload.get("arguments")
+            if isinstance(arguments, dict):
+                return OrchestrationToolCall(
+                    server_id=server_id,
+                    tool_name=str(payload["tool_name"]),
+                    arguments=arguments,
+                )
+            return None
+
+        server = self._select_fallback_server(registered_servers, downstream_hint)
+        if not server:
+            return None
+
+        if "model" in payload and "values" in payload:
+            return OrchestrationToolCall(
+                server_id=server.server_id,
+                tool_name="create_record",
+                arguments={"model": payload["model"], "values": payload["values"]},
+            )
+        if "model" in payload and "method" in payload:
+            return OrchestrationToolCall(
+                server_id=server.server_id,
+                tool_name="execute_kw",
+                arguments={
+                    "model": payload["model"],
+                    "method": payload["method"],
+                    "args": payload.get("args", []),
+                    "kwargs": payload.get("kwargs", {}),
+                },
+            )
+        return None
+
+    @staticmethod
+    def _select_fallback_server(
+        registered_servers: list[DownstreamMCPServer],
+        downstream_hint: str | None,
+    ) -> DownstreamMCPServer | None:
+        if downstream_hint:
+            return next((s for s in registered_servers if s.server_id == downstream_hint), None)
+        if len(registered_servers) == 1:
+            return registered_servers[0]
+        odoo_servers = [s for s in registered_servers if s.transport == MCPTransport.ODOO_XMLRPC]
+        if len(odoo_servers) == 1:
+            return odoo_servers[0]
+        return None
+
+    @staticmethod
+    def _extract_json_object(text: str) -> dict[str, Any] | None:
+        stripped = text.strip()
+        candidates = [stripped]
+        start = stripped.find("{")
+        end = stripped.rfind("}")
+        if start != -1 and end > start:
+            candidates.append(stripped[start : end + 1])
+        for candidate in candidates:
+            try:
+                parsed = json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+        return None
