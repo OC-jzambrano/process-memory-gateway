@@ -6,14 +6,14 @@ import inspect
 
 import server
 from server import (
-    get_company_context,
-    list_canonical_rules,
-    list_memory_candidates,
-    register_downstream_mcp,
-    remember_company_instruction,
-    review_memory_candidate,
-    run_downstream_request,
-    set_canonical_rule_status,
+    process_execute_action,
+    process_get_context,
+    process_list_candidates,
+    process_list_rules,
+    process_register_downstream_mcp,
+    process_remember_instruction,
+    process_review_candidate,
+    process_set_rule_status,
 )
 
 
@@ -34,14 +34,14 @@ def test_public_mcp_tools_contain_no_caller_controlled_identity_args():
     }
 
     tools = [
-        remember_company_instruction,
-        list_memory_candidates,
-        list_canonical_rules,
-        review_memory_candidate,
-        set_canonical_rule_status,
-        get_company_context,
-        register_downstream_mcp,
-        run_downstream_request,
+        process_remember_instruction,
+        process_list_candidates,
+        process_list_rules,
+        process_review_candidate,
+        process_set_rule_status,
+        process_get_context,
+        process_register_downstream_mcp,
+        process_execute_action,
     ]
 
     for tool_func in tools:
@@ -68,3 +68,21 @@ def test_server_module_does_not_export_legacy_tools():
         assert not hasattr(server, legacy_name), (
             f"Legacy tool '{legacy_name}' must not be exposed on server module"
         )
+
+def test_legacy_python_wrappers_remain_internal_compatibility_only():
+    """
+    Technical pre-rename wrappers may exist for Python callers, but are not part of
+    the advertised MCP registry tested in test_mcp_server.
+    """
+    compatibility_wrappers = [
+        "remember_company_instruction",
+        "list_memory_candidates",
+        "list_canonical_rules",
+        "review_memory_candidate",
+        "set_canonical_rule_status",
+        "get_company_context",
+        "register_downstream_mcp",
+        "run_downstream_request",
+    ]
+    for name in compatibility_wrappers:
+        assert callable(getattr(server, name, None))

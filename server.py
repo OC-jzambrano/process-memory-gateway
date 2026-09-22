@@ -17,6 +17,14 @@ __all__ = [
     "get_default_service",
     "list_canonical_rules",
     "list_memory_candidates",
+    "process_execute_action",
+    "process_get_context",
+    "process_list_candidates",
+    "process_list_rules",
+    "process_register_downstream_mcp",
+    "process_remember_instruction",
+    "process_review_candidate",
+    "process_set_rule_status",
     "register_downstream_mcp",
     "register_tools",
     "remember_company_instruction",
@@ -50,9 +58,9 @@ def register_tools(mcp_app: FastMCP, service: Any) -> None:
     All caller identity is server-resolved from the authenticated request context.
     """
 
-    # --- TOOL 1: REMEMBER COMPANY INSTRUCTION ---
+    # --- TOOL 1: PROCESS REMEMBER INSTRUCTION ---
     @mcp_app.tool()
-    def remember_company_instruction(
+    def process_remember_instruction(
         instruction_text: str, context_hint: dict[str, Any] | None = None
     ) -> str:
         """
@@ -72,9 +80,9 @@ def register_tools(mcp_app: FastMCP, service: Any) -> None:
         )
         return result.model_dump_json(indent=2)
 
-    # --- TOOL 2: LIST MEMORY CANDIDATES ---
+    # --- TOOL 2: PROCESS LIST CANDIDATES ---
     @mcp_app.tool()
-    def list_memory_candidates(status: str = "pending_review") -> str:
+    def process_list_candidates(status: str = "pending_review") -> str:
         """
         Lists staged memory candidates for the authenticated company awaiting human review.
 
@@ -87,9 +95,9 @@ def register_tools(mcp_app: FastMCP, service: Any) -> None:
         candidates = service.list_memory_candidates(status=status)
         return json.dumps([c.model_dump() for c in candidates], indent=2)
 
-    # --- TOOL 3: LIST CANONICAL RULES ---
+    # --- TOOL 3: PROCESS LIST RULES ---
     @mcp_app.tool()
-    def list_canonical_rules(
+    def process_list_rules(
         status: Literal["approved", "archived", "all"] = "approved",
         process_name: str | None = None,
     ) -> str:
@@ -111,9 +119,9 @@ def register_tools(mcp_app: FastMCP, service: Any) -> None:
         )
         return json.dumps([r.model_dump(mode="json") for r in rules], indent=2)
 
-    # --- TOOL 4: REVIEW MEMORY CANDIDATE ---
+    # --- TOOL 4: PROCESS REVIEW CANDIDATE ---
     @mcp_app.tool()
-    def review_memory_candidate(
+    def process_review_candidate(
         candidate_id: str,
         decision: Literal["approve", "edit", "reject"],
         edited_rule_text: str | None = None,
@@ -147,9 +155,9 @@ def register_tools(mcp_app: FastMCP, service: Any) -> None:
         )
         return result.model_dump_json(indent=2)
 
-    # --- TOOL 5: SET CANONICAL RULE STATUS ---
+    # --- TOOL 5: PROCESS SET RULE STATUS ---
     @mcp_app.tool()
-    def set_canonical_rule_status(
+    def process_set_rule_status(
         rule_id: str,
         status: Literal["approved", "archived"],
         notes: str | None = None,
@@ -175,9 +183,9 @@ def register_tools(mcp_app: FastMCP, service: Any) -> None:
         )
         return result.model_dump_json(indent=2)
 
-    # --- TOOL 6: GET COMPANY CONTEXT (MEMORY PACK) ---
+    # --- TOOL 6: PROCESS GET CONTEXT (MEMORY PACK) ---
     @mcp_app.tool()
-    def get_company_context(
+    def process_get_context(
         system: str | None = None,
         application: str | None = None,
         resource: str | None = None,
@@ -206,9 +214,9 @@ def register_tools(mcp_app: FastMCP, service: Any) -> None:
         )
         return pack.model_dump_json(indent=2)
 
-    # --- TOOL 7: REGISTER DOWNSTREAM MCP SERVER ---
+    # --- TOOL 7: PROCESS REGISTER DOWNSTREAM MCP SERVER ---
     @mcp_app.tool()
-    def register_downstream_mcp(
+    def process_register_downstream_mcp(
         server_id: str,
         endpoint: str,
         transport: str = "streamable_http",
@@ -240,23 +248,29 @@ def register_tools(mcp_app: FastMCP, service: Any) -> None:
         )
         return result.model_dump_json(indent=2)
 
-    # --- TOOL 8: RUN DOWNSTREAM REQUEST (ORCHESTRATION ENTRYPOINT) ---
+    # --- TOOL 8: PROCESS EXECUTE ACTION (ORCHESTRATION ENTRYPOINT) ---
     @mcp_app.tool()
-    def run_downstream_request(
+    def process_execute_action(
         user_request: str,
         action_context: dict[str, Any] | None = None,
         downstream_hint: str | None = None,
         correlation_id: str | None = None,
     ) -> str:
         """
-        Main orchestration entrypoint.
-        Retrieves approved company memory matching the action context, injects memory into
-        a Bedrock prompt alongside registered tools, requires a structured tool call from the model,
+        Main orchestration entrypoint for Odoo and other downstream business-system actions.
+        Use this tool directly for Odoo requests such as creating project tasks, updating records,
+        assigning users, setting deadlines, adding estimates, writing descriptions, or searching
+        for records needed by an action. This is the preferred execution tool for agents.
+
+        Retrieves approved company memory matching the action context, injects memory into a
+        Bedrock prompt alongside registered tools, requires a structured tool call from the model,
         validates the call against downstream schemas, and executes the downstream tool safely.
+        Do not call process_get_context first unless the user explicitly asks to inspect or explain
+        rules; this tool already retrieves and injects approved matching rules.
 
         Args:
             user_request: Natural language request from the user or client agent.
-            action_context: Target action context dict (system, application, resource, operation, fields).
+            action_context: Complete target action context dict (system, application, resource, operation, fields).
             downstream_hint: Optional server or tool name hint.
             correlation_id: Optional unique idempotency tracking identifier.
 
@@ -315,6 +329,10 @@ def list_memory_candidates(status: str = "pending_review") -> str:
     return json.dumps([c.model_dump() for c in candidates], indent=2)
 
 
+def process_list_candidates(status: str = "pending_review") -> str:
+    return list_memory_candidates(status=status)
+
+
 def list_canonical_rules(
     status: Literal["approved", "archived", "all"] = "approved",
     process_name: str | None = None,
@@ -324,6 +342,13 @@ def list_canonical_rules(
         process_name=process_name,
     )
     return json.dumps([r.model_dump(mode="json") for r in rules], indent=2)
+
+
+def process_list_rules(
+    status: Literal["approved", "archived", "all"] = "approved",
+    process_name: str | None = None,
+) -> str:
+    return list_canonical_rules(status=status, process_name=process_name)
 
 
 def review_memory_candidate(
@@ -346,6 +371,24 @@ def review_memory_candidate(
     return result.model_dump_json(indent=2)
 
 
+def process_review_candidate(
+    candidate_id: str,
+    decision: Literal["approve", "edit", "reject"],
+    edited_rule_text: str | None = None,
+    edited_scope: dict[str, Any] | None = None,
+    edited_constraint: dict[str, Any] | None = None,
+    notes: str | None = None,
+) -> str:
+    return review_memory_candidate(
+        candidate_id=candidate_id,
+        decision=decision,
+        edited_rule_text=edited_rule_text,
+        edited_scope=edited_scope,
+        edited_constraint=edited_constraint,
+        notes=notes,
+    )
+
+
 def set_canonical_rule_status(
     rule_id: str,
     status: Literal["approved", "archived"],
@@ -357,6 +400,14 @@ def set_canonical_rule_status(
         notes=notes,
     )
     return result.model_dump_json(indent=2)
+
+
+def process_set_rule_status(
+    rule_id: str,
+    status: Literal["approved", "archived"],
+    notes: str | None = None,
+) -> str:
+    return set_canonical_rule_status(rule_id=rule_id, status=status, notes=notes)
 
 
 def get_company_context(
@@ -374,6 +425,22 @@ def get_company_context(
         fields=fields,
     )
     return pack.model_dump_json(indent=2)
+
+
+def process_get_context(
+    system: str | None = None,
+    application: str | None = None,
+    resource: str | None = None,
+    operation: str | None = None,
+    fields: list[str] | None = None,
+) -> str:
+    return get_company_context(
+        system=system,
+        application=application,
+        resource=resource,
+        operation=operation,
+        fields=fields,
+    )
 
 
 def register_downstream_mcp(
@@ -395,6 +462,24 @@ def register_downstream_mcp(
     return result.model_dump_json(indent=2)
 
 
+def process_register_downstream_mcp(
+    server_id: str,
+    endpoint: str,
+    transport: str = "streamable_http",
+    available_tools: list[dict[str, Any]] | None = None,
+    secret_ref: str | None = None,
+    supported_action_contexts: list[dict[str, Any]] | None = None,
+) -> str:
+    return register_downstream_mcp(
+        server_id=server_id,
+        endpoint=endpoint,
+        transport=transport,
+        available_tools=available_tools,
+        secret_ref=secret_ref,
+        supported_action_contexts=supported_action_contexts,
+    )
+
+
 def run_downstream_request(
     user_request: str,
     action_context: dict[str, Any] | None = None,
@@ -409,6 +494,29 @@ def run_downstream_request(
         correlation_id=correlation_id,
     )
     return result.model_dump_json(indent=2)
+
+
+def process_execute_action(
+    user_request: str,
+    action_context: dict[str, Any] | None = None,
+    downstream_hint: str | None = None,
+    correlation_id: str | None = None,
+) -> str:
+    return run_downstream_request(
+        user_request=user_request,
+        action_context=action_context,
+        downstream_hint=downstream_hint,
+        correlation_id=correlation_id,
+    )
+
+
+def process_remember_instruction(
+    instruction_text: str, context_hint: dict[str, Any] | None = None
+) -> str:
+    return remember_company_instruction(
+        instruction_text=instruction_text,
+        context_hint=context_hint,
+    )
 
 
 def __getattr__(name: str):
