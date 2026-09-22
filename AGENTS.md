@@ -38,3 +38,4 @@ When acting as an AI coding agent or assistant (Codex, Claude, Antigravity, or C
 - Internal services (`HostedProcessMemoryService`, `MemoryRepository`, `DownstreamDispatcher`, `BedrockOrchestrator`) require authenticated request context or explicit principal context.
 - All database operations must go through `src/storage/repository.py` using `MemoryRepository`.
 - Run tests via `pytest -m "not ai"` before committing.
+- Always run Ruff before approve changes.

@@ -7,13 +7,13 @@ from mcp.shared.memory import create_connected_server_and_client_session
 
 from server import (
     create_mcp_server,
+    process_execute_action,
     process_get_context,
-    process_list_rules,
     process_list_candidates,
+    process_list_rules,
     process_register_downstream_mcp,
     process_remember_instruction,
     process_review_candidate,
-    process_execute_action,
     process_set_rule_status,
 )
 from src.api.auth_context import RequestContext, set_current_context
