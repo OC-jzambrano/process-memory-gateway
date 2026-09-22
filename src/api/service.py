@@ -37,6 +37,7 @@ from src.models.schemas import (
 from src.orchestration.bedrock_orchestrator import BedrockOrchestrator
 from src.orchestration.dispatcher import DownstreamDispatcher
 from src.storage.base_repository import BaseRepository
+from src.utils.privacy import sanitize_evidence
 
 logger = logging.getLogger(__name__)
 
@@ -491,6 +492,14 @@ class HostedProcessMemoryService:
             rule for rule in self.repo.get_active_rules(client_id=ctx.company_id)
             if rule.rule_id in selected_ids
         ]
+        actor_context = self._build_actor_context(ctx, registered_servers)
+        include_trace_details = self._can_view_trace_details(ctx)
+        memory_trace = self._build_memory_trace(
+            pack,
+            approved_rules,
+            actor_context,
+            include_details=include_trace_details,
+        )
 
         # 3. Call Bedrock Orchestrator to synthesize structured tool call
         try:
@@ -500,6 +509,7 @@ class HostedProcessMemoryService:
                 approved_rules=approved_rules,
                 registered_servers=registered_servers,
                 user_request=user_request,
+                actor_context=actor_context,
             )
         except Exception as e:  # noqa: BLE001 - Catch all orchestration exceptions to return typed OrchestrationResult
             logger.error("Bedrock orchestration error: %s", e)
@@ -518,6 +528,11 @@ class HostedProcessMemoryService:
                     **result.metadata,
                     "orchestration_fallback": "structured_json",
                     "orchestration_error": str(e),
+                    "memory_trace": memory_trace,
+                    "tool_call": self._format_tool_call_trace(
+                        fallback_call,
+                        include_details=include_trace_details,
+                    ),
                 }
                 return result
             return OrchestrationResult(
@@ -526,14 +541,187 @@ class HostedProcessMemoryService:
                 server_id=registered_servers[0].server_id,
                 tool_name="orchestration_failed",
                 error=f"Orchestration synthesis failed: {e}",
+                metadata={"memory_trace": memory_trace},
             )
 
         # 4. Dispatch tool call to downstream adapter with schema and protocol validation
-        return self.dispatcher.dispatch(
+        result = self.dispatcher.dispatch(
             company_id=ctx.company_id,
             tool_call=tool_call,
             correlation_id=cid,
         )
+        result.metadata = {
+            **result.metadata,
+            "memory_trace": memory_trace,
+            "tool_call": self._format_tool_call_trace(
+                tool_call,
+                include_details=include_trace_details,
+            ),
+        }
+        return result
+
+    def _build_actor_context(
+        self,
+        ctx,
+        registered_servers: list[DownstreamMCPServer],
+    ) -> dict[str, Any]:
+        actor_context: dict[str, Any] = {
+            "authenticated_user": {
+                "user_id": ctx.user_id,
+                "email": ctx.email,
+                "role": ctx.role.value if hasattr(ctx.role, "value") else str(ctx.role),
+            },
+            "assignment_policy": (
+                "Use the authenticated Odoo actor as the default assignee only when "
+                "the user request does not name another assignee. If the user names "
+                "another person, resolve that person explicitly and use their Odoo ID."
+            ),
+        }
+
+        odoo_actor_ids: dict[str, Any] = {}
+        for server in registered_servers:
+            if server.transport != MCPTransport.ODOO_XMLRPC:
+                continue
+            try:
+                connector = self.dispatcher._resolve_odoo_connector(server)
+                matches = connector.execute_kw(
+                    model="res.users",
+                    method="search_read",
+                    args=[
+                        [
+                            "|",
+                            ["login", "=", ctx.email],
+                            ["email", "=", ctx.email],
+                        ]
+                    ],
+                    kwargs={
+                        "fields": ["id", "name", "login", "email", "active"],
+                        "limit": 2,
+                    },
+                )
+                active_matches = [
+                    user
+                    for user in matches
+                    if isinstance(user, dict) and user.get("active", True)
+                ]
+                if len(active_matches) != 1:
+                    odoo_actor_ids[server.server_id] = {
+                        "odoo_user_id": None,
+                        "default_assignee_when_unspecified": False,
+                        "resolution_error": "no_unique_active_user_for_authenticated_email",
+                    }
+                    continue
+                actor = active_matches[0]
+                odoo_actor_ids[server.server_id] = {
+                    "odoo_user_id": actor["id"],
+                    "name": actor.get("name"),
+                    "login": actor.get("login"),
+                    "email": actor.get("email"),
+                    "default_assignee_when_unspecified": True,
+                }
+            except Exception as exc:  # noqa: BLE001 - actor context must not block execution
+                logger.warning(
+                    "Could not resolve Odoo actor context for server '%s': %s",
+                    server.server_id,
+                    exc,
+                )
+                odoo_actor_ids[server.server_id] = {
+                    "odoo_user_id": None,
+                    "default_assignee_when_unspecified": False,
+                    "resolution_error": "unavailable",
+                }
+        if odoo_actor_ids:
+            actor_context["odoo"] = odoo_actor_ids
+        return actor_context
+
+    @staticmethod
+    def _build_memory_trace(
+        pack: MemoryPack,
+        approved_rules: list[CanonicalRule],
+        actor_context: dict[str, Any],
+        include_details: bool = False,
+    ) -> dict[str, Any]:
+        trace_actor_context = (
+            actor_context if include_details else HostedProcessMemoryService._redact_actor_context(actor_context)
+        )
+        return {
+            "company_slug": pack.company_slug,
+            "action_scope": {
+                "system": pack.system,
+                "application": pack.application,
+                "resource": pack.resource,
+                "operation": pack.operation,
+            },
+            "retrieved_rule_count": len(pack.rules),
+            "omitted_count": pack.omitted_count,
+            "message": pack.message,
+            "applied_rules": [
+                {
+                    "rule_id": rule.rule_id,
+                    "version": rule.version,
+                    "enforcement_mode": rule.enforcement_mode.value,
+                    **(
+                        {
+                            "rule_text": rule.rule_text,
+                            "rule_type": rule.rule_type.value,
+                            "scope": rule.structured_scope.model_dump()
+                            if rule.structured_scope
+                            else None,
+                        }
+                        if include_details
+                        else {}
+                    ),
+                }
+                for rule in approved_rules
+            ],
+            "actor_context": trace_actor_context,
+        }
+
+    @staticmethod
+    def _can_view_trace_details(ctx) -> bool:
+        return ctx.role in {RoleType.OWNER, RoleType.REVIEWER, RoleType.AUDITOR}
+
+    @staticmethod
+    def _redact_actor_context(actor_context: dict[str, Any]) -> dict[str, Any]:
+        redacted = {
+            "authenticated_user": {
+                "user_id": actor_context.get("authenticated_user", {}).get("user_id"),
+                "role": actor_context.get("authenticated_user", {}).get("role"),
+            },
+            "assignment_policy": actor_context.get("assignment_policy"),
+        }
+        if "odoo" in actor_context:
+            redacted["odoo"] = {
+                server_id: {
+                    "odoo_user_id": values.get("odoo_user_id"),
+                    "default_assignee_when_unspecified": values.get(
+                        "default_assignee_when_unspecified"
+                    ),
+                    **(
+                        {"resolution_error": values["resolution_error"]}
+                        if values.get("resolution_error")
+                        else {}
+                    ),
+                }
+                for server_id, values in actor_context["odoo"].items()
+                if isinstance(values, dict)
+            }
+        return redacted
+
+    @staticmethod
+    def _format_tool_call_trace(
+        tool_call: OrchestrationToolCall,
+        include_details: bool = False,
+    ) -> dict[str, Any]:
+        summary = {
+            "server_id": tool_call.server_id,
+            "tool_name": tool_call.tool_name,
+        }
+        if include_details:
+            summary["arguments"] = sanitize_evidence(tool_call.arguments)
+        elif isinstance(tool_call.arguments, dict) and "model" in tool_call.arguments:
+            summary["model"] = tool_call.arguments["model"]
+        return summary
 
     def _try_structured_fallback_tool_call(
         self,

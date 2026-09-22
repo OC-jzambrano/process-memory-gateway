@@ -159,3 +159,118 @@ def test_scoped_retrieval_excludes_unrelated_modules(repo):
         r for r in pack.rules if r.scope and r.scope.resource == "work.item"
     ]
     assert len(exact_scoped) >= 1
+
+
+def test_create_scope_includes_field_rules_for_missing_required_fields(repo):
+    """Create-scoped field rules are retrieved even when caller omitted that field."""
+    retriever = MemoryRetriever(repo=repo)
+
+    from src.models.enums import RuleStatus, SourceType
+    from src.models.schemas import CandidateRule, ExtractionSession
+
+    repo.create_session(
+        ExtractionSession(
+            session_id="sess_required_field",
+            client_id="co_retrieval",
+            process_name="project",
+            source_type=SourceType.USER_INTERACTION,
+            interaction_text="Setup required task fields",
+            model_id="test",
+        )
+    )
+    repo.save_candidates(
+        [
+            CandidateRule(
+                candidate_id="cand_issue_type",
+                session_id="sess_required_field",
+                client_id="co_retrieval",
+                rule_text="All Odoo project tasks must set Project Issue Type to Task.",
+                rule_type=RuleType.OPERATIONAL_CONSTRAINT,
+                severity=Severity.INFO,
+                enforcement_mode=EnforcementMode.BLOCKING,
+                source_quote="Project Issue Type to Task",
+                confidence=0.95,
+                status=RuleStatus.PENDING_REVIEW,
+                structured_scope=ActionContext(
+                    system="odoo",
+                    application="project",
+                    resource="project.task",
+                    operation="create",
+                    fields=["project_issue_type_id"],
+                ),
+            )
+        ]
+    )
+    reviewed = repo.review_candidate(
+        "cand_issue_type",
+        decision="approve",
+        reviewer="owner",
+        client_id="co_retrieval",
+    )
+
+    pack = retriever.retrieve_pack(
+        company_id="co_retrieval",
+        company_slug="co_retrieval",
+        system="odoo",
+        application="project",
+        resource="project.task",
+        operation="create",
+        fields=["name", "description", "user_ids"],
+    )
+
+    assert reviewed is not None
+    assert [r.rule_id for r in pack.rules] == [reviewed.rule_id]
+
+
+def test_create_scope_does_not_include_broad_field_only_rules(repo):
+    """The create-field bypass only applies to exact create scopes."""
+    retriever = MemoryRetriever(repo=repo)
+
+    from src.models.enums import RuleStatus, SourceType
+    from src.models.schemas import CandidateRule, ExtractionSession
+
+    repo.create_session(
+        ExtractionSession(
+            session_id="sess_broad_field",
+            client_id="co_retrieval",
+            process_name="general",
+            source_type=SourceType.USER_INTERACTION,
+            interaction_text="Setup broad field rule",
+            model_id="test",
+        )
+    )
+    repo.save_candidates(
+        [
+            CandidateRule(
+                candidate_id="cand_margin",
+                session_id="sess_broad_field",
+                client_id="co_retrieval",
+                rule_text="Margin changes require approval.",
+                rule_type=RuleType.OPERATIONAL_CONSTRAINT,
+                severity=Severity.INFO,
+                enforcement_mode=EnforcementMode.BLOCKING,
+                source_quote="Margin changes require approval",
+                confidence=0.95,
+                status=RuleStatus.PENDING_REVIEW,
+                structured_scope=ActionContext(fields=["margin"]),
+            )
+        ]
+    )
+    repo.review_candidate(
+        "cand_margin",
+        decision="approve",
+        reviewer="owner",
+        client_id="co_retrieval",
+    )
+
+    pack = retriever.retrieve_pack(
+        company_id="co_retrieval",
+        company_slug="co_retrieval",
+        system="odoo",
+        application="project",
+        resource="project.task",
+        operation="create",
+        fields=["name", "description"],
+    )
+
+    assert pack.rules == []

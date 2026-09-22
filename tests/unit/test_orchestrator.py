@@ -72,6 +72,14 @@ def test_build_orchestration_prompt_boundaries_and_escaping():
         approved_rules=[rule],
         registered_servers=[server],
         user_request="Create a task for database backup",
+        actor_context={
+            "odoo": {
+                "odoo-prod": {
+                    "odoo_user_id": 7,
+                    "default_assignee_when_unspecified": True,
+                }
+            }
+        },
     )
 
     # Verify boundary tags
@@ -90,6 +98,8 @@ def test_build_orchestration_prompt_boundaries_and_escaping():
     assert "odoo-prod" in prompt
     assert "create_record" in prompt
     assert "Create a task for database backup" in prompt
+    assert "<authenticated_actor_context>" in prompt
+    assert '"odoo_user_id": 7' in prompt
 
 
 def test_build_orchestration_prompt_injection_sanitization():

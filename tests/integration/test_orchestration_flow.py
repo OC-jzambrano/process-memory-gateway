@@ -19,6 +19,7 @@ from src.models.schemas import (
     User,
 )
 from src.orchestration.bedrock_orchestrator import BedrockOrchestrator
+from src.orchestration.dispatcher import DownstreamDispatcher
 from src.storage.repository import MemoryRepository
 
 
@@ -152,7 +153,306 @@ def test_full_orchestration_lifecycle_with_memory_enforcement(multi_tenant_setup
         # Verify synthesized arguments adhered to company memory
         received = result.result["received_arguments"]
         assert received["values"]["name"] == "[ENG] Refactor database schema"
+        assert result.metadata["memory_trace"]["retrieved_rule_count"] == 1
+        assert result.metadata["memory_trace"]["applied_rules"][0]["rule_id"] == reviewed.rule_id
+        assert result.metadata["tool_call"]["arguments"]["values"]["name"] == "[ENG] Refactor database schema"
 
+    finally:
+        set_current_context(None)
+
+
+def test_odoo_actor_context_is_injected_without_forcing_assignee(tmp_path):
+    repo = MemoryRepository(db_path=tmp_path / "actor_context.db")
+    repo.upsert_company(
+        Company(
+            company_id="co_alpha",
+            company_slug="alpha",
+            name="Alpha Corp",
+            status=CompanyStatus.ACTIVE,
+        )
+    )
+    repo.upsert_user(
+        User(
+            user_id="user_alpha",
+            email="alpha@test.com",
+            name="Alpha Owner",
+            status="active",
+        )
+    )
+    repo.upsert_membership(
+        Membership(
+            membership_id="m_alpha",
+            company_id="co_alpha",
+            user_id="user_alpha",
+            role=RoleType.OWNER,
+            status=MembershipStatus.ACTIVE,
+        )
+    )
+
+    observed_actor_context = {}
+
+    def mock_synthesize(**kwargs):
+        observed_actor_context.update(kwargs["actor_context"])
+        return OrchestrationToolCall(
+            server_id="odoo",
+            tool_name="create_record",
+            arguments={
+                "model": "project.task",
+                "values": {"name": "Actor default task", "user_ids": [(6, 0, [166])]},
+            },
+        )
+
+    class FakeOdooConnector:
+        def execute_kw(self, model, method, args=None, kwargs=None):
+            assert model == "res.users"
+            assert method == "search_read"
+            return [
+                {
+                    "id": 166,
+                    "name": "Alpha Owner",
+                    "login": "alpha@test.com",
+                    "email": "alpha@test.com",
+                    "active": True,
+                }
+            ]
+
+        def create_record(self, model, values):
+            return {"id": 29003, "model": model, "values": values}
+
+    dispatcher = DownstreamDispatcher(
+        repo=repo,
+        odoo_connector_factory=lambda _server: FakeOdooConnector(),
+    )
+    service = HostedProcessMemoryService(
+        repo=repo,
+        orchestrator=BedrockOrchestrator(mock_handler=mock_synthesize),
+        dispatcher=dispatcher,
+    )
+    set_current_context(
+        RequestContext(
+            company_id="co_alpha",
+            company_slug="alpha",
+            user_id="user_alpha",
+            email="alpha@test.com",
+            role=RoleType.OWNER,
+        )
+    )
+    try:
+        service.register_downstream_mcp(
+            server_id="odoo",
+            endpoint="https://community.odooconcept.com",
+            transport="odoo_xmlrpc",
+        )
+
+        result = service.run_downstream_request(
+            user_request="Create a task for me",
+            action_context=ActionContext(
+                system="odoo",
+                application="project",
+                resource="project.task",
+                operation="create",
+                fields=["name", "user_ids"],
+            ),
+            downstream_hint="odoo",
+        )
+
+        assert result.success is True
+        assert observed_actor_context["odoo"]["odoo"]["odoo_user_id"] == 166
+        assert "does not name another assignee" in observed_actor_context["assignment_policy"]
+        assert result.metadata["memory_trace"]["actor_context"]["odoo"]["odoo"]["odoo_user_id"] == 166
+    finally:
+        set_current_context(None)
+
+
+def test_odoo_actor_context_does_not_use_connector_uid_as_requester(tmp_path):
+    repo = MemoryRepository(db_path=tmp_path / "actor_context_no_match.db")
+    repo.upsert_company(
+        Company(
+            company_id="co_alpha",
+            company_slug="alpha",
+            name="Alpha Corp",
+            status=CompanyStatus.ACTIVE,
+        )
+    )
+    repo.upsert_user(
+        User(
+            user_id="user_alpha",
+            email="alpha@test.com",
+            name="Alpha Owner",
+            status="active",
+        )
+    )
+    repo.upsert_membership(
+        Membership(
+            membership_id="m_alpha",
+            company_id="co_alpha",
+            user_id="user_alpha",
+            role=RoleType.OWNER,
+            status=MembershipStatus.ACTIVE,
+        )
+    )
+
+    observed_actor_context = {}
+
+    def mock_synthesize(**kwargs):
+        observed_actor_context.update(kwargs["actor_context"])
+        return OrchestrationToolCall(
+            server_id="odoo",
+            tool_name="create_record",
+            arguments={"model": "project.task", "values": {"name": "No default actor"}},
+        )
+
+    class AdminConnector:
+        def authenticate(self):
+            return 1
+
+        def execute_kw(self, model, method, args=None, kwargs=None):
+            assert model == "res.users"
+            assert method == "search_read"
+            return []
+
+        def create_record(self, model, values):
+            return {"id": 29004, "model": model, "values": values}
+
+    dispatcher = DownstreamDispatcher(
+        repo=repo,
+        odoo_connector_factory=lambda _server: AdminConnector(),
+    )
+    service = HostedProcessMemoryService(
+        repo=repo,
+        orchestrator=BedrockOrchestrator(mock_handler=mock_synthesize),
+        dispatcher=dispatcher,
+    )
+    set_current_context(
+        RequestContext(
+            company_id="co_alpha",
+            company_slug="alpha",
+            user_id="user_alpha",
+            email="alpha@test.com",
+            role=RoleType.OWNER,
+        )
+    )
+    try:
+        service.register_downstream_mcp(
+            server_id="odoo",
+            endpoint="https://community.odooconcept.com",
+            transport="odoo_xmlrpc",
+        )
+        result = service.run_downstream_request(
+            user_request="Create a task for me",
+            action_context=ActionContext(
+                system="odoo",
+                application="project",
+                resource="project.task",
+                operation="create",
+                fields=["name", "user_ids"],
+            ),
+            downstream_hint="odoo",
+        )
+
+        assert result.success is True
+        actor = observed_actor_context["odoo"]["odoo"]
+        assert actor["odoo_user_id"] is None
+        assert actor["default_assignee_when_unspecified"] is False
+        assert actor["resolution_error"] == "no_unique_active_user_for_authenticated_email"
+    finally:
+        set_current_context(None)
+
+
+def test_action_metadata_redacts_details_for_member_role(multi_tenant_setup):
+    service, repo, _observed_rule_ids = multi_tenant_setup
+    repo.upsert_user(
+        User(
+            user_id="user_alpha_member",
+            email="member@test.com",
+            name="Alpha Member",
+            status="active",
+        )
+    )
+    repo.upsert_membership(
+        Membership(
+            membership_id="m_alpha_member",
+            company_id="co_alpha",
+            user_id="user_alpha_member",
+            role=RoleType.MEMBER,
+            status=MembershipStatus.ACTIVE,
+        )
+    )
+    repo.create_canonical_rule(
+        CanonicalRule(
+            rule_id="rule_sensitive",
+            client_id="co_alpha",
+            process_name="general",
+            rule_text="Sensitive internal handling rule.",
+            rule_type=RuleType.OPERATIONAL_CONSTRAINT,
+            severity=Severity.INFO,
+            enforcement_mode=EnforcementMode.ADVISORY,
+            structured_scope=ActionContext(
+                system="odoo",
+                application="project",
+                resource="work.item",
+                operation="create",
+            ),
+            approved_by="user_alpha",
+        )
+    )
+    set_current_context(
+        RequestContext(
+            company_id="co_alpha",
+            company_slug="alpha",
+            user_id="user_alpha",
+            email="alpha@test.com",
+            role=RoleType.OWNER,
+        )
+    )
+    try:
+        service.register_downstream_mcp(
+            server_id="odoo-main",
+            endpoint="mock://odoo-alpha",
+            transport="internal_mock",
+            available_tools=[
+                {
+                    "name": "create_record",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "model": {"type": "string"},
+                            "values": {"type": "object"},
+                        },
+                        "required": ["model", "values"],
+                    },
+                }
+            ],
+        )
+    finally:
+        set_current_context(None)
+
+    set_current_context(
+        RequestContext(
+            company_id="co_alpha",
+            company_slug="alpha",
+            user_id="user_alpha_member",
+            email="member@test.com",
+            role=RoleType.MEMBER,
+        )
+    )
+    try:
+        result = service.run_downstream_request(
+            user_request="Internal task with confidential payload",
+            action_context=ActionContext(
+                system="odoo",
+                application="project",
+                resource="work.item",
+                operation="create",
+            ),
+        )
+
+        assert result.success is True
+        rule_trace = result.metadata["memory_trace"]["applied_rules"][0]
+        assert rule_trace["rule_id"] == "rule_sensitive"
+        assert "rule_text" not in rule_trace
+        assert "arguments" not in result.metadata["tool_call"]
+        assert "email" not in result.metadata["memory_trace"]["actor_context"]["authenticated_user"]
     finally:
         set_current_context(None)
 

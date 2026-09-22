@@ -43,6 +43,9 @@ def matches_scope(
     - Unspecified rule dimensions allow broader applicability.
     - If a rule specifies a dimension, but the query lacks that dimension, the rule is excluded.
     - Field-scoped rules require at least one overlapping field when a field filter is supplied.
+      For exact create scopes, field-scoped rules still match when the requested fields omit the
+      rule field, because those rules often define required fields the agent must add before creating
+      the record.
     - Process name mismatches (e.g. rule has process_name='sales' and target is 'project') exclude the rule.
     """
     # 1. Process name check
@@ -85,11 +88,19 @@ def matches_scope(
         if scope.operation.lower() != operation.lower():
             return False
 
-    # 6. Fields check: if filter supplied and rule has fields, must overlap
+    # 6. Fields check: if filter supplied and rule has fields, must overlap.
+    # Create rules may define missing required fields, so exact create scopes remain applicable.
     if scope.fields and len(scope.fields) > 0 and fields and len(fields) > 0:
         rule_field_set = {f.lower().strip() for f in scope.fields}
         query_field_set = {f.lower().strip() for f in fields}
-        if not (rule_field_set & query_field_set):
+        exact_create_scope = (
+            (operation or "").lower() == "create"
+            and (scope.operation or "").lower() == "create"
+            and bool(scope.system)
+            and bool(scope.application)
+            and bool(scope.resource)
+        )
+        if not (rule_field_set & query_field_set) and not exact_create_scope:
             return False
 
     return True
