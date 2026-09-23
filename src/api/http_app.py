@@ -504,9 +504,12 @@ BG=document.getElementById('btn_gen_key'),KL=document.getElementById('key_label'
 NKD=document.getElementById('new_key_display'),NKV=document.getElementById('new_key_value'),
 EK=document.getElementById('existing_keys'),CC=document.getElementById('client_cards');
 let curKey=null;
-function gc(){return AC.value.trim()||new URLSearchParams(location.search).get('company')||localStorage.getItem('opmCompany')||'odooconcept'}
-function gb(){const t=sessionStorage.getItem('opmAccessToken')||'';return t?'Bearer '+t:''}
-function sc(){const c=gc();AC.value=c;localStorage.setItem('opmCompany',c);const u=new URL(location);u.searchParams.set('company',c);history.replaceState({},'',u)}
+function safeGet(t,k){try{return window[t].getItem(k)||''}catch(e){return ''}}
+function safeSet(t,k,v){try{window[t].setItem(k,v)}catch(e){console.warn('Storage blocked:',e)}}
+function safeRem(t,k){try{window[t].removeItem(k)}catch(e){}}
+function gc(){return AC.value.trim()||new URLSearchParams(location.search).get('company')||safeGet('localStorage','opmCompany')||'odooconcept'}
+function gb(){const t=safeGet('sessionStorage','opmAccessToken');return t?'Bearer '+t:''}
+function sc(){const c=gc();AC.value=c;safeSet('localStorage','opmCompany',c);const u=new URL(location);u.searchParams.set('company',c);history.replaceState({},'',u)}
 function esc(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 async function login(){
   try {
@@ -520,7 +523,7 @@ async function login(){
       m='S256';
     }
     const st=b64u(crypto.getRandomValues(new Uint8Array(24)));
-    sessionStorage.setItem('opmPkceVerifier',v);sessionStorage.setItem('opmOAuthState',st);sc();
+    safeSet('sessionStorage','opmPkceVerifier',v);safeSet('sessionStorage','opmOAuthState',st);sc();
     const p=new URLSearchParams({response_type:'code',client_id:cfg.client_id,redirect_uri:cfg.redirect_uri,scope:cfg.scope,state:st,code_challenge:ch,code_challenge_method:m});
     location.assign(cfg.authorization_endpoint+'?'+p)
   } catch(e) {
@@ -529,19 +532,19 @@ async function login(){
 }
 async function completeLogin(){
   const p=new URLSearchParams(location.search),code=p.get('code');if(!code)return;
-  const st=p.get('state'),ex=sessionStorage.getItem('opmOAuthState'),v=sessionStorage.getItem('opmPkceVerifier');
-  sessionStorage.removeItem('opmOAuthState');sessionStorage.removeItem('opmPkceVerifier');
+  const st=p.get('state'),ex=safeGet('sessionStorage','opmOAuthState'),v=safeGet('sessionStorage','opmPkceVerifier');
+  safeRem('sessionStorage','opmOAuthState');safeRem('sessionStorage','opmPkceVerifier');
   if(!st||!ex||st!==ex||!v)throw new Error('Invalid OAuth state');
   const cfg=await fetch('/install/auth-config').then(r=>r.json());
   const res=await fetch(cfg.token_endpoint,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
     body:new URLSearchParams({grant_type:'authorization_code',client_id:cfg.client_id,code,redirect_uri:cfg.redirect_uri,code_verifier:v})});
   const pl=await res.json();if(!res.ok||!pl.access_token)throw new Error(pl.error_description||'Token exchange failed');
-  sessionStorage.setItem('opmAccessToken',pl.access_token);
+  safeSet('sessionStorage','opmAccessToken',pl.access_token);
   const cl=new URL(location);['code','state','error','error_description'].forEach(k=>cl.searchParams.delete(k));
   history.replaceState({},'',cl)
 }
 BL.onclick=()=>login().catch(()=>{AS.className='status-badge err';AS.textContent='Login error'});
-BO.onclick=()=>{sessionStorage.removeItem('opmAccessToken');AS.className='status-badge err';AS.textContent='Signed out';EK.innerHTML='';CC.innerHTML='';NKD.classList.add('hidden');curKey=null};
+BO.onclick=()=>{safeRem('sessionStorage','opmAccessToken');AS.className='status-badge err';AS.textContent='Signed out';EK.innerHTML='';CC.innerHTML='';NKD.classList.add('hidden');curKey=null};
 BG.onclick=async()=>{
   const b=gb(),c=gc();if(!b){alert('Sign in first.');return}
   BG.disabled=true;BG.textContent='Generating...';
@@ -599,17 +602,23 @@ function renderClients(){
   CC.innerHTML=h
 }
 // Init
-(function(){const p=new URLSearchParams(location.search);
-  AC.value=p.get('company')||localStorage.getItem('opmCompany')||'odooconcept';
-  if(p.get('error'))AS.textContent='Login failed'})();
-completeLogin().then(async()=>{
-  const b=gb();if(!b){AS.className='status-badge err';AS.textContent='Sign-in required';return}
-  try{const c=gc(),r=await fetch('/install/api-keys?company='+encodeURIComponent(c),{headers:{Authorization:b}});
-    if(r.ok){AS.className='status-badge ok';AS.textContent='Authenticated';loadKeys()}
-    else if(r.status===401){sessionStorage.removeItem('opmAccessToken');AS.className='status-badge err';AS.textContent='Session expired'}
-    else{AS.className='status-badge err';AS.textContent='Error ('+r.status+')'}
-  }catch(e){AS.className='status-badge err';AS.textContent='Network error'}
-}).catch(()=>{AS.className='status-badge err';AS.textContent='Login error'});
+(function(){
+  try {
+    const p=new URLSearchParams(location.search);
+    AC.value=p.get('company')||safeGet('localStorage','opmCompany')||'odooconcept';
+    if(p.get('error'))AS.textContent='Login failed';
+    completeLogin().then(async()=>{
+      const b=gb();if(!b){AS.className='status-badge err';AS.textContent='Sign-in required';return}
+      try{const c=gc(),r=await fetch('/install/api-keys?company='+encodeURIComponent(c),{headers:{Authorization:b}});
+        if(r.ok){AS.className='status-badge ok';AS.textContent='Authenticated';loadKeys()}
+        else if(r.status===401){safeRem('sessionStorage','opmAccessToken');AS.className='status-badge err';AS.textContent='Session expired'}
+        else{AS.className='status-badge err';AS.textContent='Error ('+r.status+')'}
+      }catch(e){AS.className='status-badge err';AS.textContent='Network error'}
+    }).catch(e=>{AS.className='status-badge err';AS.textContent='Login error: '+e.message});
+  } catch(err) {
+    AS.className='status-badge err';AS.textContent='Init error: '+err.message;
+  }
+})();
 </script></body></html>"""
 
 
