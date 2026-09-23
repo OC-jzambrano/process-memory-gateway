@@ -268,6 +268,7 @@ class DownstreamMCPServer(BaseModel):
     available_tools: list[DownstreamToolDefinition] = Field(default_factory=list)
     secret_ref: str | None = None
     supported_action_contexts: list[ActionContext] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: str | None = None
     updated_at: str | None = None
 

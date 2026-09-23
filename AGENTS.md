@@ -11,6 +11,13 @@ When acting as an AI coding agent or assistant (Codex, Claude, Antigravity, or C
 - When Odoo IDs are required, include the lookup requirement in the natural-language `user_request`; do not bypass the gateway to discover IDs.
 - Verify the result after every mutating downstream action, preferably through `process_execute_action` with a read/search context or by using the returned result when it already includes the created/updated record.
 
+## Gateway Boundary: Do Not Turn OPM Into An Odoo Executor
+- OPM is a process-memory gateway, not a hard-coded Odoo task creator. It should resolve authentication/tenant context, retrieve canonical rules, inject policy and actor context into the orchestration prompt, dispatch only registered downstream tools, and return trace evidence.
+- Do not encode Odoo-specific business workflows in OPM service code, such as fixed project/category/tag lookups, Gantt defaults, or task-construction recipes. Those belong in the downstream MCP/adapter, the model's tool-use plan, or a deliberate downstream semantic tool.
+- It is acceptable for OPM to capture stable integration identity at downstream registration time. For Odoo XML-RPC, registration should resolve and persist the `res.users` identity behind the registered credentials with the OPM user that registered it, then expose it in actor context and trace metadata only when the same OPM user is executing. This lets prompts like "assign it to me" use a verified downstream actor without guessing from the OPM/Cognito email, while preventing a company-wide connector from becoming the default assignee for every user.
+- If a user names another assignee, the model/downstream must resolve that assignee explicitly; the registered actor is only the default when the request does not name another person.
+- Prefer richer downstream tools or multi-step tool orchestration when repeated one-call retries are slow or brittle. A semantic downstream tool like `create_project_task` may accept a structured payload with project name, issue type, schedule, estimate, and assignment intent, then perform Odoo lookups internally. That saves latency and round trips while keeping OPM as the policy gateway instead of moving ERP semantics into OPM.
+
 ## 1. Process Memory & MCP Orchestration (Public MCP Surface)
 - **Approved Public MCP Tools (8 Only):**
   1. `process_remember_instruction`: Stage proposed operational rules, conventions, or constraints from dialogue as `pending_review`.

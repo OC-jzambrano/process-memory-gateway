@@ -203,9 +203,12 @@ def test_odoo_actor_context_is_injected_without_forcing_assignee(tmp_path):
         )
 
     class FakeOdooConnector:
+        def authenticate(self):
+            return 166
+
         def execute_kw(self, model, method, args=None, kwargs=None):
             assert model == "res.users"
-            assert method == "search_read"
+            assert method == "read"
             return [
                 {
                     "id": 166,
@@ -243,6 +246,9 @@ def test_odoo_actor_context_is_injected_without_forcing_assignee(tmp_path):
             endpoint="https://community.odooconcept.com",
             transport="odoo_xmlrpc",
         )
+        server = repo.get_downstream_mcp("co_alpha", "odoo")
+        assert server.metadata["registered_actor"]["odoo_user_id"] == 166
+        assert server.metadata["registered_actor"]["source"] == "downstream_registration_credentials"
 
         result = service.run_downstream_request(
             user_request="Create a task for me",
@@ -258,14 +264,15 @@ def test_odoo_actor_context_is_injected_without_forcing_assignee(tmp_path):
 
         assert result.success is True
         assert observed_actor_context["odoo"]["odoo"]["odoo_user_id"] == 166
+        assert observed_actor_context["odoo"]["odoo"]["source"] == "downstream_registration_credentials"
         assert "does not name another assignee" in observed_actor_context["assignment_policy"]
         assert result.metadata["memory_trace"]["actor_context"]["odoo"]["odoo"]["odoo_user_id"] == 166
     finally:
         set_current_context(None)
 
 
-def test_odoo_actor_context_does_not_use_connector_uid_as_requester(tmp_path):
-    repo = MemoryRepository(db_path=tmp_path / "actor_context_no_match.db")
+def test_odoo_actor_context_uses_registered_downstream_actor(tmp_path):
+    repo = MemoryRepository(db_path=tmp_path / "actor_context_registered.db")
     repo.upsert_company(
         Company(
             company_id="co_alpha",
@@ -302,21 +309,29 @@ def test_odoo_actor_context_does_not_use_connector_uid_as_requester(tmp_path):
             arguments={"model": "project.task", "values": {"name": "No default actor"}},
         )
 
-    class AdminConnector:
+    class RegisteredConnector:
         def authenticate(self):
-            return 1
+            return 7
 
         def execute_kw(self, model, method, args=None, kwargs=None):
             assert model == "res.users"
-            assert method == "search_read"
-            return []
+            assert method == "read"
+            return [
+                {
+                    "id": 7,
+                    "name": "Registered Odoo User",
+                    "login": "registered@example.com",
+                    "email": "registered@example.com",
+                    "active": True,
+                }
+            ]
 
         def create_record(self, model, values):
             return {"id": 29004, "model": model, "values": values}
 
     dispatcher = DownstreamDispatcher(
         repo=repo,
-        odoo_connector_factory=lambda _server: AdminConnector(),
+        odoo_connector_factory=lambda _server: RegisteredConnector(),
     )
     service = HostedProcessMemoryService(
         repo=repo,
@@ -352,9 +367,142 @@ def test_odoo_actor_context_does_not_use_connector_uid_as_requester(tmp_path):
 
         assert result.success is True
         actor = observed_actor_context["odoo"]["odoo"]
+        assert actor["odoo_user_id"] == 7
+        assert actor["source"] == "downstream_registration_credentials"
+        assert actor["default_assignee_when_unspecified"] is True
+    finally:
+        set_current_context(None)
+
+
+def test_registered_downstream_actor_is_not_default_for_different_opm_user(tmp_path):
+    repo = MemoryRepository(db_path=tmp_path / "actor_context_other_user.db")
+    repo.upsert_company(
+        Company(
+            company_id="co_alpha",
+            company_slug="alpha",
+            name="Alpha Corp",
+            status=CompanyStatus.ACTIVE,
+        )
+    )
+    repo.upsert_user(
+        User(
+            user_id="registrar",
+            email="registrar@test.com",
+            name="Registrar",
+            status="active",
+        )
+    )
+    repo.upsert_user(
+        User(
+            user_id="operator",
+            email="operator@test.com",
+            name="Operator",
+            status="active",
+        )
+    )
+    repo.upsert_membership(
+        Membership(
+            membership_id="m_registrar",
+            company_id="co_alpha",
+            user_id="registrar",
+            role=RoleType.OWNER,
+            status=MembershipStatus.ACTIVE,
+        )
+    )
+    repo.upsert_membership(
+        Membership(
+            membership_id="m_operator",
+            company_id="co_alpha",
+            user_id="operator",
+            role=RoleType.OPERATOR,
+            status=MembershipStatus.ACTIVE,
+        )
+    )
+
+    observed_actor_context = {}
+
+    def mock_synthesize(**kwargs):
+        observed_actor_context.update(kwargs["actor_context"])
+        return OrchestrationToolCall(
+            server_id="odoo",
+            tool_name="create_record",
+            arguments={"model": "project.task", "values": {"name": "Other user task"}},
+        )
+
+    class RegisteredConnector:
+        def authenticate(self):
+            return 7
+
+        def execute_kw(self, model, method, args=None, kwargs=None):
+            assert model == "res.users"
+            assert method == "read"
+            return [
+                {
+                    "id": 7,
+                    "name": "Registrar Odoo User",
+                    "login": "registrar@example.com",
+                    "email": "registrar@example.com",
+                    "active": True,
+                }
+            ]
+
+        def create_record(self, model, values):
+            return {"id": 29006, "model": model, "values": values}
+
+    dispatcher = DownstreamDispatcher(
+        repo=repo,
+        odoo_connector_factory=lambda _server: RegisteredConnector(),
+    )
+    service = HostedProcessMemoryService(
+        repo=repo,
+        orchestrator=BedrockOrchestrator(mock_handler=mock_synthesize),
+        dispatcher=dispatcher,
+    )
+    set_current_context(
+        RequestContext(
+            company_id="co_alpha",
+            company_slug="alpha",
+            user_id="registrar",
+            email="registrar@test.com",
+            role=RoleType.OWNER,
+        )
+    )
+    try:
+        service.register_downstream_mcp(
+            server_id="odoo",
+            endpoint="https://community.odooconcept.com",
+            transport="odoo_xmlrpc",
+        )
+    finally:
+        set_current_context(None)
+
+    set_current_context(
+        RequestContext(
+            company_id="co_alpha",
+            company_slug="alpha",
+            user_id="operator",
+            email="operator@test.com",
+            role=RoleType.OPERATOR,
+        )
+    )
+    try:
+        result = service.run_downstream_request(
+            user_request="Create a task for me",
+            action_context=ActionContext(
+                system="odoo",
+                application="project",
+                resource="project.task",
+                operation="create",
+                fields=["name", "user_ids"],
+            ),
+            downstream_hint="odoo",
+        )
+
+        assert result.success is True
+        actor = observed_actor_context["odoo"]["odoo"]
         assert actor["odoo_user_id"] is None
         assert actor["default_assignee_when_unspecified"] is False
-        assert actor["resolution_error"] == "no_unique_active_user_for_authenticated_email"
+        assert actor["resolution_error"] == "registered_actor_belongs_to_different_opm_user"
     finally:
         set_current_context(None)
 

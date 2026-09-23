@@ -187,6 +187,7 @@ CREATE TABLE IF NOT EXISTS downstream_mcp_servers (
     available_tools_json            TEXT NOT NULL DEFAULT '[]',
     secret_ref                      TEXT,
     supported_action_contexts_json  TEXT NOT NULL DEFAULT '[]',
+    metadata_json                   TEXT NOT NULL DEFAULT '{}',
     created_at                      TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at                      TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (company_id, server_id),
@@ -275,6 +276,15 @@ def _migrate_columns_if_needed(conn: sqlite3.Connection) -> None:
             "ALTER TABLE odoo_connections ADD COLUMN status TEXT NOT NULL DEFAULT 'active';"
         )
 
+    downstream_cols = [
+        r["name"]
+        for r in cursor.execute("PRAGMA table_info(downstream_mcp_servers);").fetchall()
+    ]
+    if "metadata_json" not in downstream_cols and len(downstream_cols) > 0:
+        cursor.execute(
+            "ALTER TABLE downstream_mcp_servers ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}';"
+        )
+
 def _run_migration_v2(conn: sqlite3.Connection) -> None:
     """Migration v2: registers downstream_mcp_servers and cleans up deprecated execution tables."""
     cursor = conn.cursor()
@@ -287,6 +297,7 @@ def _run_migration_v2(conn: sqlite3.Connection) -> None:
             available_tools_json            TEXT NOT NULL DEFAULT '[]',
             secret_ref                      TEXT,
             supported_action_contexts_json  TEXT NOT NULL DEFAULT '[]',
+            metadata_json                   TEXT NOT NULL DEFAULT '{}',
             created_at                      TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at                      TEXT NOT NULL DEFAULT (datetime('now')),
             PRIMARY KEY (company_id, server_id),

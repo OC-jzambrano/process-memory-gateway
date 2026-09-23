@@ -403,6 +403,11 @@ class HostedProcessMemoryService:
             created_at=self._now(),
             updated_at=self._now(),
         )
+        if transport_enum == MCPTransport.ODOO_XMLRPC:
+            server.metadata = {
+                **server.metadata,
+                "registered_actor": self._resolve_registered_odoo_actor(server, ctx),
+            }
 
         self.repo.upsert_downstream_mcp(server)
 
@@ -413,6 +418,57 @@ class HostedProcessMemoryService:
             tool_count=len(server.available_tools),
             message=f"Downstream MCP server '{server.server_id}' registered successfully with {len(server.available_tools)} tool(s).",
         )
+
+    def _resolve_registered_odoo_actor(
+        self, server: DownstreamMCPServer, ctx
+    ) -> dict[str, Any]:
+        """Resolve the Odoo user behind the registered XML-RPC credentials."""
+        try:
+            connector = self.dispatcher._resolve_odoo_connector(server)
+            uid = connector.authenticate()
+            users = connector.execute_kw(
+                model="res.users",
+                method="read",
+                args=[
+                    [uid],
+                    ["id", "name", "login", "email", "active"],
+                ],
+            )
+            user = users[0] if isinstance(users, list) and users else {}
+            if not isinstance(user, dict) or user.get("id") != uid:
+                return {
+                    "odoo_user_id": None,
+                    "registered_by_user_id": ctx.user_id,
+                    "registered_by_email": ctx.email,
+                    "source": "downstream_registration_credentials",
+                    "default_assignee_when_unspecified": False,
+                    "resolution_error": "registered_odoo_user_not_readable",
+                }
+            return {
+                "odoo_user_id": uid,
+                "name": user.get("name"),
+                "login": user.get("login") or getattr(connector, "login", None),
+                "email": user.get("email"),
+                "active": user.get("active", True),
+                "registered_by_user_id": ctx.user_id,
+                "registered_by_email": ctx.email,
+                "source": "downstream_registration_credentials",
+                "default_assignee_when_unspecified": bool(user.get("active", True)),
+            }
+        except Exception as exc:  # noqa: BLE001 - registration metadata must not leak secrets
+            logger.warning(
+                "Could not resolve registered Odoo actor for server '%s': %s",
+                server.server_id,
+                sanitize_evidence(str(exc)),
+            )
+            return {
+                "odoo_user_id": None,
+                "registered_by_user_id": ctx.user_id,
+                "registered_by_email": ctx.email,
+                "source": "downstream_registration_credentials",
+                "default_assignee_when_unspecified": False,
+                "resolution_error": "unavailable",
+            }
 
     def list_downstream_mcps(self) -> list[DownstreamMCPServer]:
         ctx = get_current_context()
@@ -582,6 +638,32 @@ class HostedProcessMemoryService:
         for server in registered_servers:
             if server.transport != MCPTransport.ODOO_XMLRPC:
                 continue
+            registered_actor = (server.metadata or {}).get("registered_actor")
+            if isinstance(registered_actor, dict) and registered_actor.get("odoo_user_id"):
+                if registered_actor.get("registered_by_user_id") != ctx.user_id:
+                    odoo_actor_ids[server.server_id] = {
+                        "odoo_user_id": None,
+                        "source": registered_actor.get(
+                            "source", "downstream_registration_credentials"
+                        ),
+                        "default_assignee_when_unspecified": False,
+                        "resolution_error": "registered_actor_belongs_to_different_opm_user",
+                    }
+                    continue
+                verified_actor = self._verify_registered_odoo_actor(server, registered_actor)
+                odoo_actor_ids[server.server_id] = {
+                    "odoo_user_id": verified_actor.get("odoo_user_id"),
+                    "source": verified_actor.get("source"),
+                    "default_assignee_when_unspecified": verified_actor.get(
+                        "default_assignee_when_unspecified"
+                    ),
+                    **(
+                        {"resolution_error": verified_actor["resolution_error"]}
+                        if verified_actor.get("resolution_error")
+                        else {}
+                    ),
+                }
+                continue
             try:
                 connector = self.dispatcher._resolve_odoo_connector(server)
                 matches = connector.execute_kw(
@@ -614,9 +696,7 @@ class HostedProcessMemoryService:
                 actor = active_matches[0]
                 odoo_actor_ids[server.server_id] = {
                     "odoo_user_id": actor["id"],
-                    "name": actor.get("name"),
-                    "login": actor.get("login"),
-                    "email": actor.get("email"),
+                    "source": "authenticated_opm_email_lookup",
                     "default_assignee_when_unspecified": True,
                 }
             except Exception as exc:  # noqa: BLE001 - actor context must not block execution
@@ -633,6 +713,57 @@ class HostedProcessMemoryService:
         if odoo_actor_ids:
             actor_context["odoo"] = odoo_actor_ids
         return actor_context
+
+    def _verify_registered_odoo_actor(
+        self, server: DownstreamMCPServer, registered_actor: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Verify a persisted registered actor still exists and is active before use."""
+        uid = registered_actor.get("odoo_user_id")
+        if not uid:
+            return {
+                "odoo_user_id": None,
+                "source": registered_actor.get("source", "downstream_registration_credentials"),
+                "default_assignee_when_unspecified": False,
+                "resolution_error": "missing_registered_odoo_user_id",
+            }
+        try:
+            connector = self.dispatcher._resolve_odoo_connector(server)
+            users = connector.execute_kw(
+                model="res.users",
+                method="read",
+                args=[[uid], ["id", "active"]],
+            )
+            user = users[0] if isinstance(users, list) and users else {}
+            if not isinstance(user, dict) or user.get("id") != uid:
+                return {
+                    "odoo_user_id": None,
+                    "source": registered_actor.get(
+                        "source", "downstream_registration_credentials"
+                    ),
+                    "default_assignee_when_unspecified": False,
+                    "resolution_error": "registered_odoo_user_not_readable",
+                }
+            active = bool(user.get("active", True))
+            return {
+                "odoo_user_id": uid if active else None,
+                "source": registered_actor.get(
+                    "source", "downstream_registration_credentials"
+                ),
+                "default_assignee_when_unspecified": active,
+                **({} if active else {"resolution_error": "registered_odoo_user_inactive"}),
+            }
+        except Exception as exc:  # noqa: BLE001 - actor verification must not block execution
+            logger.warning(
+                "Could not verify registered Odoo actor for server '%s': %s",
+                server.server_id,
+                sanitize_evidence(str(exc)),
+            )
+            return {
+                "odoo_user_id": None,
+                "source": registered_actor.get("source", "downstream_registration_credentials"),
+                "default_assignee_when_unspecified": False,
+                "resolution_error": "registered_actor_verification_failed",
+            }
 
     @staticmethod
     def _build_memory_trace(
@@ -694,6 +825,7 @@ class HostedProcessMemoryService:
             redacted["odoo"] = {
                 server_id: {
                     "odoo_user_id": values.get("odoo_user_id"),
+                    "source": values.get("source"),
                     "default_assignee_when_unspecified": values.get(
                         "default_assignee_when_unspecified"
                     ),

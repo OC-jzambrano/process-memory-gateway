@@ -1114,6 +1114,7 @@ class MemoryRepository(BaseRepository):
         contexts_json = json.dumps(
             [ctx.model_dump() for ctx in server.supported_action_contexts]
         )
+        metadata_json = json.dumps(server.metadata or {})
         transport_val = (
             server.transport.value
             if hasattr(server.transport, "value")
@@ -1125,14 +1126,15 @@ class MemoryRepository(BaseRepository):
                 """
                 INSERT INTO downstream_mcp_servers
                 (company_id, server_id, endpoint, transport, available_tools_json, secret_ref,
-                 supported_action_contexts_json, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 supported_action_contexts_json, metadata_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(company_id, server_id) DO UPDATE SET
                     endpoint=excluded.endpoint,
                     transport=excluded.transport,
                     available_tools_json=excluded.available_tools_json,
                     secret_ref=excluded.secret_ref,
                     supported_action_contexts_json=excluded.supported_action_contexts_json,
+                    metadata_json=excluded.metadata_json,
                     updated_at=excluded.updated_at
                 """,
                 (
@@ -1143,6 +1145,7 @@ class MemoryRepository(BaseRepository):
                     tools_json,
                     server.secret_ref,
                     contexts_json,
+                    metadata_json,
                     server.created_at or now,
                     now,
                 ),
@@ -1189,6 +1192,9 @@ class MemoryRepository(BaseRepository):
         tools = [DownstreamToolDefinition(**t) for t in raw_tools]
         raw_contexts = json.loads(d.get("supported_action_contexts_json") or "[]")
         contexts = [ActionContext(**c) for c in raw_contexts]
+        metadata = json.loads(d.get("metadata_json") or "{}")
+        if not isinstance(metadata, dict):
+            metadata = {}
         transport_val = d.get("transport") or MCPTransport.STREAMABLE_HTTP.value
         try:
             transport = MCPTransport(transport_val)
@@ -1203,6 +1209,7 @@ class MemoryRepository(BaseRepository):
             available_tools=tools,
             secret_ref=d.get("secret_ref"),
             supported_action_contexts=contexts,
+            metadata=metadata,
             created_at=d.get("created_at"),
             updated_at=d.get("updated_at"),
         )
