@@ -387,6 +387,10 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
             conn.execute(
                 "INSERT OR IGNORE INTO schema_migrations (version, name) VALUES (2, 'add_downstream_mcps_and_deprecate_execution_runs');"
             )
+        if applied is None or applied < 3:
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version, name) VALUES (3, 'add_api_keys_table');"
+            )
 
 
 def run_migrations(db_path: str | Path = DEFAULT_DB_PATH) -> int:
@@ -412,5 +416,9 @@ def run_migrations(db_path: str | Path = DEFAULT_DB_PATH) -> int:
             conn.execute(
                 "INSERT OR IGNORE INTO schema_migrations (version, name) VALUES (2, 'add_downstream_mcps_and_deprecate_execution_runs');"
             )
-            return 2
+        if applied < 3:
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version, name) VALUES (3, 'add_api_keys_table');"
+            )
+            return 3
         return applied

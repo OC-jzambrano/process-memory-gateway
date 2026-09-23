@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 import hashlib
 import html
@@ -723,11 +724,17 @@ def _resolve_api_key_context(raw_token: str) -> RequestContext | None:
     if not membership or membership.status != MembershipStatus.ACTIVE:
         return None
 
-    # Update last_used_at (best-effort)
+    # Update last_used_at asynchronously to avoid blocking the ASGI event loop
     try:
-        repo.touch_api_key_usage(key_record["key_id"])
+        loop = asyncio.get_running_loop()
+        loop.run_in_executor(None, repo.touch_api_key_usage, key_record["key_id"])
+    except RuntimeError:
+        try:
+            repo.touch_api_key_usage(key_record["key_id"])
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Failed to touch API key usage: %s", exc)
     except Exception as exc:  # noqa: BLE001
-        logger.debug("Failed to touch API key usage: %s", exc)
+        logger.debug("Failed to dispatch touch API key usage: %s", exc)
 
     return RequestContext(
         company_id=company.company_id,
@@ -948,29 +955,34 @@ class CompanyMCPHandler:
         raw_headers = scope.get("headers", [])
         headers = {k.lower(): v.decode("latin1") for k, v in raw_headers}
         auth_header = headers.get(b"authorization", "")
+        api_key_header = (
+            headers.get(b"x-api-key", "")
+            or headers.get(b"x-consumer-api-key", "")
+        )
         client_agent = headers.get(b"user-agent", "unknown-mcp-client")
 
-        if not auth_header or not auth_header.lower().startswith("bearer "):
+        # Determine token and whether it is an API key
+        token = ""
+        is_api_key = False
+        if api_key_header:
+            token = api_key_header.strip()
+            is_api_key = True
+        elif auth_header and auth_header.lower().startswith("bearer "):
+            token = auth_header[7:].strip()
+            if token.startswith("opm_"):
+                is_api_key = True
+
+        if not token:
             res = JSONResponse(
-                {"error": "unauthorized", "message": "Missing Bearer token."},
+                {"error": "unauthorized", "message": "Missing Bearer token or API key."},
                 status_code=401,
                 headers={"WWW-Authenticate": 'Bearer realm="ProcessMemory"'},
             )
             await res(scope, receive, send)
             return
 
-        token = auth_header[7:].strip()
-        if not token:
-            res = JSONResponse(
-                {"error": "unauthorized", "message": "Bearer token cannot be empty."},
-                status_code=401,
-                headers={"WWW-Authenticate": 'Bearer error="invalid_token"'},
-            )
-            await res(scope, receive, send)
-            return
-
-        # API key authentication (persistent keys starting with opm_)
-        if token.startswith("opm_"):
+        # API key authentication (persistent keys starting with opm_ or sent via X-API-Key)
+        if is_api_key:
             req_ctx = _resolve_api_key_context(token)
             if not req_ctx:
                 res = JSONResponse(

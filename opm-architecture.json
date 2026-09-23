@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Odoo Process Memory (OPM) Architecture",
+    "output": "opm-architecture.html",
+    "quality_profile": "showcase",
+    "animation": "trace",
+    "viewBox": [1560, 640],
+    "views": [
+      {
+        "id": "ingestion-and-auth",
+        "label": "Ingress and Authentication",
+        "focus": ["clients", "proxy", "auth", "gateway"],
+        "note": "Clients enter via Caddy TLS edge with Cognito JWT or API key validation."
+      },
+      {
+        "id": "memory-governance",
+        "label": "Memory Governance & Storage",
+        "focus": ["gateway", "governance", "storage"],
+        "note": "Tenant-scoped canonical rules and pending review candidates in persistent storage."
+      },
+      {
+        "id": "bedrock-orchestration",
+        "label": "Bedrock Orchestration",
+        "focus": ["governance", "bedrock", "dispatcher"],
+        "note": "MemoryPack context injection into isolated Bedrock prompt for structured tool calling."
+      },
+      {
+        "id": "downstream-dispatch",
+        "label": "Downstream Execution & Audit",
+        "focus": ["dispatcher", "secrets", "odoo", "downstream_mcp", "audit"],
+        "note": "Protocol guard resolves credentials via Secrets Manager, dispatches calls, and audits decisions."
+      }
+    ]
+  },
+  "components": [
+    { "id": "clients", "type": "external", "label": "MCP Clients", "sublabel": "Claude · Codex · Cursor", "pos": [40, 300], "size": [120, 60], "tag": "consumer" },
+    { "id": "proxy", "type": "security", "label": "Caddy Edge", "sublabel": "TLS · WAF · Rate Limit", "pos": [260, 300], "size": [120, 60], "tag": "edge" },
+    { "id": "auth", "type": "security", "label": "Auth Provider", "sublabel": "Cognito JWT · API Keys", "pos": [480, 130], "size": [120, 60], "tag": "identity" },
+    { "id": "gateway", "type": "backend", "label": "OPM Service", "sublabel": "FastAPI · MCP Host", "pos": [480, 300], "size": [120, 60], "tag": "platform" },
+    { "id": "governance", "type": "backend", "label": "Governance Engine", "sublabel": "Scope Matcher · Rules", "pos": [700, 300], "size": [120, 60], "tag": "memory" },
+    { "id": "storage", "type": "database", "label": "Tenant Storage", "sublabel": "PostgreSQL · SQLite", "pos": [700, 470], "size": [120, 60], "tag": "persistence" },
+    { "id": "bedrock", "type": "cloud", "label": "Amazon Bedrock", "sublabel": "Claude 3.5 Sonnet", "pos": [920, 300], "size": [120, 60], "tag": "reasoning" },
+    { "id": "dispatcher", "type": "backend", "label": "MCP Dispatcher", "sublabel": "Protocol & Schema Guard", "pos": [1140, 300], "size": [120, 60], "tag": "guardrails" },
+    { "id": "secrets", "type": "security", "label": "Secrets Manager", "sublabel": "Downstream Credentials", "pos": [1140, 470], "size": [120, 60], "tag": "credentials" },
+    { "id": "audit", "type": "cloud", "label": "Audit & Telemetry", "sublabel": "Events · Logs · Traces", "pos": [1140, 130], "size": [120, 60], "tag": "audit" },
+    { "id": "odoo", "type": "external", "label": "Odoo 17 ERP", "sublabel": "XML-RPC (/xmlrpc/2)", "pos": [1360, 220], "size": [120, 60], "tag": "downstream" },
+    { "id": "downstream_mcp", "type": "external", "label": "Downstream MCP", "sublabel": "Registered Tool Servers", "pos": [1360, 380], "size": [120, 60], "tag": "downstream" }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Cloud Control Plane", "wraps": ["proxy", "auth", "gateway", "governance", "storage", "bedrock", "dispatcher", "secrets", "audit"], "pad": 24 },
+    { "kind": "security-group", "label": "Private Core Network", "wraps": ["gateway", "governance", "storage", "dispatcher"], "pad": 16 }
+  ],
+  "connections": [
+    { "from": "clients", "to": "proxy", "label": "HTTPS / SSE", "variant": "emphasis" },
+    { "from": "proxy", "to": "gateway", "label": "proxy request", "variant": "emphasis" },
+    { "from": "gateway", "to": "auth", "label": "validate auth", "variant": "security", "fromSide": "top", "toSide": "bottom" },
+    { "from": "gateway", "to": "governance", "label": "tenant context", "variant": "emphasis" },
+    { "from": "governance", "to": "storage", "label": "active rules", "fromSide": "bottom", "toSide": "top" },
+    { "from": "governance", "to": "bedrock", "label": "isolated prompt", "variant": "emphasis" },
+    { "from": "bedrock", "to": "dispatcher", "label": "tool intent", "variant": "emphasis" },
+    { "from": "dispatcher", "to": "secrets", "label": "read secrets", "variant": "security", "fromSide": "bottom", "toSide": "top" },
+    { "from": "dispatcher", "to": "odoo", "label": "XML-RPC", "variant": "emphasis" },
+    { "from": "dispatcher", "to": "downstream_mcp", "label": "JSON-RPC", "variant": "emphasis" },
+    { "from": "dispatcher", "to": "audit", "label": "audit event", "variant": "dashed", "fromSide": "top", "toSide": "bottom" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Dual-Key Ingress",
+      "items": [
+        "Clients connect over TLS through Caddy reverse proxy",
+        "Authentication validates Cognito JWT Bearer tokens or persistent API keys",
+        "Tenant isolation strictly scopes all operations to authenticated company ID"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Two-Stage Memory Governance",
+      "items": [
+        "Natural-language company instructions captured as pending_review candidates",
+        "Human review required before rules become versioned canonical memory",
+        "Scope Matcher filters rules dynamically by system, application, resource, and operation"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Guarded Orchestration & Dispatch",
+      "items": [
+        "Bedrock prompt isolates company memory and registered tool schemas",
+        "Dispatcher enforces schema validation, protocol compliance, and destination allowlists",
+        "Thin Odoo 17 XML-RPC adapter and MCP servers execute with resolved secrets"
+      ]
+    }
+  ]
+}

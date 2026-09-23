@@ -501,3 +501,51 @@ def test_invalid_api_key(auth_setup):
     )
     assert resp.status_code == 401
 
+
+def test_api_key_via_custom_headers(auth_setup):
+    """Verify API keys sent via x-api-key or x-consumer-api-key headers authenticate successfully."""
+    client = auth_setup["client"]
+    token = make_token(auth_setup["private_key"], sub="sub-alice-12345")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Generate key
+    resp = client.post(
+        "/install/api-key?company=company_a",
+        json={"label": "header-test-key"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    api_key = resp.json()["api_key"]
+
+    # 1. Test via x-api-key header
+    mcp_resp_1 = client.post(
+        "/companies/company_a/mcp",
+        headers={"x-api-key": api_key, "Accept": "application/json, text/event-stream"},
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+    )
+    assert mcp_resp_1.status_code == 200
+
+    # 2. Test via x-consumer-api-key header
+    mcp_resp_2 = client.post(
+        "/companies/company_a/mcp",
+        headers={"x-consumer-api-key": api_key, "Accept": "application/json, text/event-stream"},
+        json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+    )
+    assert mcp_resp_2.status_code == 200
+
+
+def test_database_migration_v3_recorded(tmp_path):
+    """Verify migration v3 is properly applied and recorded in schema_migrations."""
+    from src.storage.db import get_connection, run_migrations
+
+    test_db = tmp_path / "test_mig_v3.db"
+    latest_version = run_migrations(test_db)
+    assert latest_version == 3
+
+    with get_connection(test_db) as conn:
+        row = conn.execute(
+            "SELECT MAX(version) FROM schema_migrations;"
+        ).fetchone()
+        assert row[0] == 3
+
+
