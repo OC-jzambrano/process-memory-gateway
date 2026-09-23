@@ -1259,3 +1259,72 @@ class MemoryRepository(BaseRepository):
                 (client_id, retention_days),
             )
             return cur.rowcount
+
+    # --- 7. API KEYS ---
+    def create_api_key(
+        self,
+        key_id: str,
+        key_hash: str,
+        key_prefix: str,
+        company_id: str,
+        user_id: str,
+        label: str = "default",
+    ) -> dict:
+        """Stores a hashed API key for persistent MCP client authentication."""
+        now = self._now()
+        with db_session(self.db_path) as conn, conn:
+            conn.execute(
+                """
+                INSERT INTO api_keys (key_id, key_hash, key_prefix, company_id, user_id, label, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, 'active', ?)
+                """,
+                (key_id, key_hash, key_prefix, company_id, user_id, label, now),
+            )
+        return {
+            "key_id": key_id,
+            "key_prefix": key_prefix,
+            "company_id": company_id,
+            "user_id": user_id,
+            "label": label,
+            "created_at": now,
+        }
+
+    def get_api_key_by_hash(self, key_hash: str) -> dict | None:
+        """Looks up an active API key by its SHA-256 hash."""
+        with db_session(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT * FROM api_keys WHERE key_hash = ? AND status = 'active'",
+                (key_hash,),
+            ).fetchone()
+            if row:
+                return dict(row)
+        return None
+
+    def list_api_keys(self, company_id: str, user_id: str) -> list[dict]:
+        """Lists API keys for a user within a company (prefix only, never the full key)."""
+        with db_session(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT key_id, key_prefix, label, status, created_at, last_used_at "
+                "FROM api_keys WHERE company_id = ? AND user_id = ? ORDER BY created_at DESC",
+                (company_id, user_id),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def revoke_api_key(self, key_id: str, company_id: str) -> bool:
+        """Revokes an API key so it can no longer be used for authentication."""
+        with db_session(self.db_path) as conn, conn:
+            cur = conn.execute(
+                "UPDATE api_keys SET status = 'revoked' WHERE key_id = ? AND company_id = ?",
+                (key_id, company_id),
+            )
+            return cur.rowcount > 0
+
+    def touch_api_key_usage(self, key_id: str) -> None:
+        """Updates last_used_at timestamp for audit trail."""
+        now = self._now()
+        with db_session(self.db_path) as conn, conn:
+            conn.execute(
+                "UPDATE api_keys SET last_used_at = ? WHERE key_id = ?",
+                (now, key_id),
+            )
+

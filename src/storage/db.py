@@ -195,6 +195,25 @@ CREATE TABLE IF NOT EXISTS downstream_mcp_servers (
 );
 
 CREATE INDEX IF NOT EXISTS idx_downstream_mcps_company ON downstream_mcp_servers(company_id);
+
+-- 10. API Keys for persistent MCP client authentication
+CREATE TABLE IF NOT EXISTS api_keys (
+    key_id          TEXT PRIMARY KEY,
+    key_hash        TEXT NOT NULL UNIQUE,
+    key_prefix      TEXT NOT NULL,
+    company_id      TEXT NOT NULL,
+    user_id         TEXT NOT NULL,
+    label           TEXT NOT NULL DEFAULT 'default',
+    status          TEXT NOT NULL DEFAULT 'active'
+                    CHECK (status IN ('active', 'revoked')),
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    last_used_at    TEXT,
+    FOREIGN KEY (company_id) REFERENCES companies(company_id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
+CREATE INDEX IF NOT EXISTS idx_api_keys_company_user ON api_keys(company_id, user_id);
 """
 
 
@@ -315,12 +334,41 @@ def _run_migration_v2(conn: sqlite3.Connection) -> None:
     cursor.execute("DROP TABLE IF EXISTS execution_runs;")
 
 
+
+def _run_migration_v3(conn: sqlite3.Connection) -> None:
+    """Migration v3: adds api_keys table for persistent MCP client authentication."""
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS api_keys (
+            key_id          TEXT PRIMARY KEY,
+            key_hash        TEXT NOT NULL UNIQUE,
+            key_prefix      TEXT NOT NULL,
+            company_id      TEXT NOT NULL,
+            user_id         TEXT NOT NULL,
+            label           TEXT NOT NULL DEFAULT 'default',
+            status          TEXT NOT NULL DEFAULT 'active'
+                            CHECK (status IN ('active', 'revoked')),
+            created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+            last_used_at    TEXT,
+            FOREIGN KEY (company_id) REFERENCES companies(company_id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+        );
+    """)
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_api_keys_company_user ON api_keys(company_id, user_id);"
+    )
+
+
 def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
     """Initializes the database schema with constraints, indexes, and immutability triggers."""
     with db_session(db_path) as conn, conn:
         conn.executescript(SCHEMA_SQL)
         _migrate_columns_if_needed(conn)
         _run_migration_v2(conn)
+        _run_migration_v3(conn)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS schema_migrations (
                 version     INTEGER PRIMARY KEY,

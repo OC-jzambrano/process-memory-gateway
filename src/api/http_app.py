@@ -1,7 +1,10 @@
 import contextlib
+import hashlib
 import html
 import json
 import logging
+import secrets as stdlib_secrets
+import uuid
 
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -28,6 +31,8 @@ from src.config import (
     DOMAIN_NAME,
     MCP_RESOURCE_URL,
 )
+from src.models.enums import CompanyStatus, MembershipStatus
+from src.models.schemas import RequestContext
 from src.orchestration.dispatcher import DownstreamDispatcher
 from src.storage.db import get_connection
 from src.storage.repository import MemoryRepository
@@ -371,6 +376,370 @@ async def downstream_ui(request: Request) -> HTMLResponse:
     return HTMLResponse(DOWNSTREAM_UI)
 
 
+# ─── INSTALL PAGE: ONE-CLICK MCP CONFIG FOR ALL AI CLIENTS ───────────
+
+INSTALL_UI = """<!doctype html><html><head><meta charset='utf-8'>
+<title>Install Process Memory Gateway</title>
+<meta name='viewport' content='width=device-width, initial-scale=1'>
+<style>
+:root{--bg:#0f172a;--surface:#1e293b;--border:#334155;--text:#e2e8f0;--muted:#94a3b8;
+--accent:#3b82f6;--accent-hover:#2563eb;--success:#22c55e;--danger:#ef4444;
+--card-bg:#1e293b;--code-bg:#0f172a;--radius:10px}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font:15px/1.6 system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);
+min-height:100vh}
+.container{max-width:860px;margin:0 auto;padding:32px 20px}
+h1{font-size:28px;font-weight:700;background:linear-gradient(135deg,#60a5fa,#a78bfa);
+-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:4px}
+.subtitle{color:var(--muted);font-size:14px;margin-bottom:32px}
+.step{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+padding:24px;margin-bottom:20px}
+.step h2{font-size:17px;font-weight:600;margin-bottom:12px;display:flex;align-items:center;gap:10px}
+.step-num{background:var(--accent);color:white;width:28px;height:28px;border-radius:50%;
+display:inline-flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:end}
+input{padding:10px 12px;background:var(--code-bg);border:1px solid var(--border);
+border-radius:6px;color:var(--text);font-size:14px;width:100%}
+input:focus{outline:none;border-color:var(--accent)}
+label{display:block;font-size:13px;color:var(--muted);margin-bottom:4px}
+button{padding:10px 20px;border:none;border-radius:6px;font-size:14px;font-weight:600;
+cursor:pointer;transition:all .15s}
+.btn-primary{background:var(--accent);color:white}
+.btn-primary:hover{background:var(--accent-hover)}
+.btn-secondary{background:#475569;color:white}
+.btn-danger{background:var(--danger);color:white;font-size:12px;padding:6px 12px}
+.btn-sm{font-size:12px;padding:6px 14px}
+.status-badge{display:inline-block;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:600}
+.status-badge.ok{background:rgba(34,197,94,.15);color:#4ade80}
+.status-badge.err{background:rgba(239,68,68,.15);color:#f87171}
+.status-badge.pending{background:rgba(234,179,8,.15);color:#facc15}
+.key-display{background:var(--code-bg);border:1px solid var(--success);border-radius:6px;
+padding:16px;margin:12px 0;font-family:monospace;font-size:14px;
+word-break:break-all;color:var(--success);position:relative}
+.key-display .warn{color:var(--danger);font-size:12px;display:block;margin-top:8px;font-family:system-ui}
+.client-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+overflow:hidden;margin-bottom:12px}
+.client-header{padding:14px 20px;display:flex;align-items:center;gap:12px;
+border-bottom:1px solid var(--border);cursor:pointer;user-select:none}
+.client-header h3{font-size:15px;font-weight:600;flex:1}
+.client-badge{font-size:11px;padding:3px 8px;border-radius:4px;background:rgba(59,130,246,.15);color:#60a5fa}
+.client-body{padding:20px;display:none}
+.client-card.open .client-body{display:block}
+.client-card.open .client-header{background:rgba(59,130,246,.05)}
+.config-block{position:relative;background:var(--code-bg);border:1px solid var(--border);
+border-radius:6px;padding:14px;margin:8px 0 12px;overflow-x:auto}
+.config-block pre{font-family:monospace;font-size:12px;line-height:1.5;
+white-space:pre;color:#93c5fd;margin:0}
+.config-block .copy-btn{position:absolute;top:8px;right:8px;background:var(--accent);
+color:white;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer}
+.file-path{font-size:12px;color:var(--muted);font-family:monospace;margin-bottom:4px}
+.instructions{font-size:13px;color:var(--muted);margin-top:8px;line-height:1.6}
+.instructions ol{padding-left:20px}
+.instructions li{margin-bottom:4px}
+.existing-keys table{width:100%;border-collapse:collapse;font-size:13px;margin-top:12px}
+.existing-keys th{text-align:left;padding:8px;color:var(--muted);border-bottom:1px solid var(--border)}
+.existing-keys td{padding:8px;border-bottom:1px solid var(--border)}
+.hidden{display:none!important}
+.flex-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.chevron{transition:transform .2s;font-size:12px;color:var(--muted)}
+.client-card.open .chevron{transform:rotate(90deg)}
+</style></head>
+<body>
+<div class='container'>
+<h1>Process Memory Gateway</h1>
+<p class='subtitle'>One-click MCP server installation for your AI coding assistant</p>
+
+<div class='step'>
+  <h2><span class='step-num'>1</span> Sign in with your company account</h2>
+  <div class='row'>
+    <div><label>Company Slug</label>
+    <input id='auth_company' placeholder='odooconcept' value='odooconcept'></div>
+    <div class='flex-row' style='padding-bottom:2px'>
+      <button id='btn_login' class='btn-primary'>Sign in with Cognito</button>
+      <button id='btn_logout' class='btn-secondary btn-sm'>Sign out</button>
+    </div>
+  </div>
+  <div style='margin-top:10px'>
+    <span id='auth_status' class='status-badge pending'>Checking...</span>
+  </div>
+</div>
+
+<div class='step' id='step_key'>
+  <h2><span class='step-num'>2</span> Generate a persistent API key</h2>
+  <p style='font-size:13px;color:var(--muted);margin-bottom:12px'>
+    This key never expires and replaces short-lived Cognito tokens in your AI client config.</p>
+  <div class='flex-row'>
+    <input id='key_label' placeholder='Label (e.g. my-laptop)' value='default' style='max-width:220px'>
+    <button id='btn_gen_key' class='btn-primary'>Generate API Key</button>
+  </div>
+  <div id='new_key_display' class='hidden'>
+    <div class='key-display'>
+      <span id='new_key_value'></span>
+      <span class='warn'>&#9888; Copy this key now &mdash; it will not be shown again.</span>
+    </div>
+    <button class='btn-secondary btn-sm' onclick="navigator.clipboard.writeText(document.getElementById('new_key_value').textContent).then(()=>{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy Key',1500)})">Copy Key</button>
+  </div>
+  <div id='existing_keys' class='existing-keys'></div>
+</div>
+
+<div class='step' id='step_install'>
+  <h2><span class='step-num'>3</span> Add to your AI client</h2>
+  <p style='font-size:13px;color:var(--muted);margin-bottom:16px'>
+    Click your AI client below, copy the config, and paste it into the indicated file.</p>
+  <div id='client_cards'></div>
+</div>
+</div>
+
+<script>
+const AC=document.getElementById('auth_company'),AS=document.getElementById('auth_status'),
+BL=document.getElementById('btn_login'),BO=document.getElementById('btn_logout'),
+BG=document.getElementById('btn_gen_key'),KL=document.getElementById('key_label'),
+NKD=document.getElementById('new_key_display'),NKV=document.getElementById('new_key_value'),
+EK=document.getElementById('existing_keys'),CC=document.getElementById('client_cards');
+let curKey=null;
+function gc(){return AC.value.trim()||new URLSearchParams(location.search).get('company')||localStorage.getItem('opmCompany')||'odooconcept'}
+function gb(){const t=sessionStorage.getItem('opmAccessToken')||'';return t?'Bearer '+t:''}
+function sc(){const c=gc();AC.value=c;localStorage.setItem('opmCompany',c);const u=new URL(location);u.searchParams.set('company',c);history.replaceState({},'',u)}
+function esc(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+async function login(){
+  const cfg=await fetch('/install/auth-config').then(r=>r.json());
+  const b64u=b=>btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/,'');
+  const v=b64u(crypto.getRandomValues(new Uint8Array(32)));
+  const ch=b64u(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(v)));
+  const st=b64u(crypto.getRandomValues(new Uint8Array(24)));
+  sessionStorage.setItem('opmPkceVerifier',v);sessionStorage.setItem('opmOAuthState',st);sc();
+  const p=new URLSearchParams({response_type:'code',client_id:cfg.client_id,redirect_uri:cfg.redirect_uri,scope:cfg.scope,state:st,code_challenge:ch,code_challenge_method:'S256'});
+  location.assign(cfg.authorization_endpoint+'?'+p)
+}
+async function completeLogin(){
+  const p=new URLSearchParams(location.search),code=p.get('code');if(!code)return;
+  const st=p.get('state'),ex=sessionStorage.getItem('opmOAuthState'),v=sessionStorage.getItem('opmPkceVerifier');
+  sessionStorage.removeItem('opmOAuthState');sessionStorage.removeItem('opmPkceVerifier');
+  if(!st||!ex||st!==ex||!v)throw new Error('Invalid OAuth state');
+  const cfg=await fetch('/install/auth-config').then(r=>r.json());
+  const res=await fetch(cfg.token_endpoint,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
+    body:new URLSearchParams({grant_type:'authorization_code',client_id:cfg.client_id,code,redirect_uri:cfg.redirect_uri,code_verifier:v})});
+  const pl=await res.json();if(!res.ok||!pl.access_token)throw new Error(pl.error_description||'Token exchange failed');
+  sessionStorage.setItem('opmAccessToken',pl.access_token);
+  const cl=new URL(location);['code','state','error','error_description'].forEach(k=>cl.searchParams.delete(k));
+  history.replaceState({},'',cl)
+}
+BL.onclick=()=>login().catch(()=>{AS.className='status-badge err';AS.textContent='Login error'});
+BO.onclick=()=>{sessionStorage.removeItem('opmAccessToken');AS.className='status-badge err';AS.textContent='Signed out';EK.innerHTML='';CC.innerHTML='';NKD.classList.add('hidden');curKey=null};
+BG.onclick=async()=>{
+  const b=gb(),c=gc();if(!b){alert('Sign in first.');return}
+  BG.disabled=true;BG.textContent='Generating...';
+  try{const r=await fetch('/install/api-key?company='+encodeURIComponent(c),{method:'POST',headers:{'Content-Type':'application/json',Authorization:b},body:JSON.stringify({label:KL.value.trim()||'default'})});
+    const d=await r.json();if(!r.ok){alert(d.error||d.message||'Failed');return}
+    curKey=d.api_key;NKV.textContent=d.api_key;NKD.classList.remove('hidden');renderClients();loadKeys()
+  }catch(e){alert('Error: '+e.message)}
+  finally{BG.disabled=false;BG.textContent='Generate API Key'}
+};
+async function loadKeys(){
+  const b=gb(),c=gc();if(!b)return;
+  try{const r=await fetch('/install/api-keys?company='+encodeURIComponent(c),{headers:{Authorization:b}});
+    if(!r.ok)return;const keys=await r.json();
+    if(!keys.length){EK.innerHTML='<p style="font-size:13px;color:var(--muted)">No keys yet.</p>';return}
+    let h='<table><tr><th>Prefix</th><th>Label</th><th>Created</th><th>Last Used</th><th></th></tr>';
+    keys.forEach(k=>{h+='<tr><td><code>'+esc(k.key_prefix)+'...</code></td><td>'+esc(k.label)+'</td><td>'+(k.created_at||'').slice(0,10)+'</td><td>'+(k.last_used_at||'never')+'</td><td>'+(k.status==='active'?"<button class='btn-danger' onclick=\"revokeKey('"+k.key_id+"')\">Revoke</button>":'<em>revoked</em>')+'</td></tr>'});
+    EK.innerHTML=h+'</table>';if(!curKey&&keys.some(k=>k.status==='active'))renderClients()
+  }catch(e){console.error(e)}
+}
+async function revokeKey(id){if(!confirm('Revoke this key?'))return;const b=gb(),c=gc();
+  await fetch('/install/api-key/revoke?company='+encodeURIComponent(c),{method:'POST',headers:{'Content-Type':'application/json',Authorization:b},body:JSON.stringify({key_id:id})});loadKeys()
+}
+function mcpUrl(){const h=location.host;const p=location.protocol;return p+'//'+h+'/companies/'+encodeURIComponent(gc())+'/mcp'}
+function renderClients(){
+  const url=mcpUrl(),kp=curKey||'opm_YOUR_API_KEY_HERE',bv='Bearer '+kp;
+  const clients=[
+    {name:'Antigravity Desktop',badge:'Recommended',
+     path:'Settings > Customizations > Open MCP Config',
+     config:JSON.stringify({mcpServers:{"process-memory":{serverUrl:url,headers:{Authorization:bv}}}},null,2),
+     steps:['Open Antigravity Desktop','Go to <b>Settings &rarr; Customizations</b>','Click <b>Open MCP Config</b>','Replace contents with the config below','Click <b>Refresh</b> in Installed MCP Servers']},
+    {name:'Antigravity CLI (agy)',badge:'Developers',
+     path:'.mcp.json (project root) or global mcp_config.json',
+     config:JSON.stringify({mcpServers:{"process-memory":{serverUrl:url,headers:{Authorization:bv}}}},null,2),
+     steps:['Create or edit <b>.mcp.json</b> in your project root','Paste the config below','Run <b>agy</b> &mdash; the server appears automatically']},
+    {name:'Claude Desktop',badge:'Anthropic',
+     path:navigator.platform.includes('Win')?'%APPDATA%\\Claude\\claude_desktop_config.json':navigator.platform.includes('Mac')?'~/Library/Application Support/Claude/claude_desktop_config.json':'~/.config/claude/claude_desktop_config.json',
+     config:JSON.stringify({mcpServers:{"process-memory":{command:"npx",args:["-y","@anthropic/mcp-remote",url,"--header","Authorization: "+bv]}}},null,2),
+     steps:['Open Claude Desktop &rarr; <b>Settings &rarr; Developer &rarr; Edit Config</b>','Paste the config below','Restart Claude Desktop','The process-memory tools will appear in chat']},
+    {name:'Codex (OpenAI)',badge:'OpenAI',
+     path:'.codex/mcp.json',
+     config:JSON.stringify({mcpServers:{"process-memory":{type:"url",url:url,headers:{Authorization:bv}}}},null,2),
+     steps:['Create <b>.codex/mcp.json</b> in your project root','Paste the config below','Run <b>codex</b> &mdash; it discovers the MCP server']}
+  ];
+  let h='';
+  clients.forEach((c,i)=>{
+    h+='<div class="client-card'+(i===0?' open':'')+'">'
+      +'<div class="client-header" onclick="this.parentElement.classList.toggle(\'open\')"><span class="chevron">&#9654;</span><h3>'+esc(c.name)+'</h3><span class="client-badge">'+esc(c.badge)+'</span></div>'
+      +'<div class="client-body"><div class="file-path">'+esc(c.path)+'</div>'
+      +'<div class="config-block"><button class="copy-btn" onclick="event.stopPropagation();const p=this.parentElement.querySelector(\'pre\');navigator.clipboard.writeText(p.textContent).then(()=>{this.textContent=\'Copied!\';setTimeout(()=>this.textContent=\'Copy\',1500)})">Copy</button>'
+      +'<pre>'+esc(c.config)+'</pre></div>'
+      +'<div class="instructions"><ol>';
+    c.steps.forEach(s=>{h+='<li>'+s+'</li>'});
+    h+='</ol></div></div></div>'
+  });
+  CC.innerHTML=h
+}
+// Init
+(function(){const p=new URLSearchParams(location.search);
+  AC.value=p.get('company')||localStorage.getItem('opmCompany')||'odooconcept';
+  if(p.get('error'))AS.textContent='Login failed'})();
+completeLogin().then(async()=>{
+  const b=gb();if(!b){AS.className='status-badge err';AS.textContent='Sign-in required';return}
+  try{const c=gc(),r=await fetch('/install/api-keys?company='+encodeURIComponent(c),{headers:{Authorization:b}});
+    if(r.ok){AS.className='status-badge ok';AS.textContent='Authenticated';loadKeys()}
+    else if(r.status===401){sessionStorage.removeItem('opmAccessToken');AS.className='status-badge err';AS.textContent='Session expired'}
+    else{AS.className='status-badge err';AS.textContent='Error ('+r.status+')'}
+  }catch(e){AS.className='status-badge err';AS.textContent='Network error'}
+}).catch(()=>{AS.className='status-badge err';AS.textContent='Login error'});
+</script></body></html>"""
+
+
+async def install_page(request: Request) -> HTMLResponse:
+    """Serves the one-click MCP install page."""
+    return HTMLResponse(INSTALL_UI)
+
+
+async def install_auth_config(request: Request) -> JSONResponse:
+    """Return Cognito OAuth metadata for the install page PKCE flow."""
+    host = request.headers.get(
+        "x-opm-public-host",
+        request.headers.get("x-forwarded-host", request.headers.get("host", DOMAIN_NAME)),
+    )
+    proto = "http" if host in {"localhost", "127.0.0.1"} else "https"
+    origin = f"{proto}://{host}"
+    auth_base = COGNITO_DOMAIN or (
+        f"https://cognito-idp.{COGNITO_REGION}.amazonaws.com/{COGNITO_USER_POOL_ID}"
+    )
+    if not auth_base.startswith("http"):
+        auth_base = f"https://{auth_base}"
+    return JSONResponse({
+        "client_id": COGNITO_APP_CLIENT_ID,
+        "redirect_uri": f"{origin}/install",
+        "authorization_endpoint": f"{auth_base}/oauth2/authorize",
+        "token_endpoint": f"{auth_base}/oauth2/token",
+        "logout_endpoint": f"{auth_base}/logout",
+        "logout_uri": f"{origin}/install",
+        "scope": (
+            f"openid email {COGNITO_RESOURCE_SERVER_IDENTIFIER}/"
+            f"{COGNITO_REQUIRED_SCOPE}"
+        ),
+    })
+
+
+async def install_generate_key(request: Request) -> JSONResponse:
+    """Generate a persistent API key for MCP client authentication."""
+    try:
+        ctx = await _resolve_ui_context(request)
+    except AuthenticationError as e:
+        return JSONResponse({"error": "unauthorized", "message": sanitize_evidence(str(e))}, status_code=401)
+    except AuthorizationError as e:
+        return JSONResponse({"error": "forbidden", "message": sanitize_evidence(str(e))}, status_code=403)
+
+    try:
+        data = await request.json()
+        label = data.get("label", "default").strip() or "default"
+
+        # Generate key: opm_ + 32 hex chars (128-bit entropy)
+        raw_key = "opm_" + stdlib_secrets.token_hex(16)
+        key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+        key_prefix = raw_key[:12]
+        key_id = f"key_{uuid.uuid4().hex[:16]}"
+
+        repo.create_api_key(
+            key_id=key_id,
+            key_hash=key_hash,
+            key_prefix=key_prefix,
+            company_id=ctx.company_id,
+            user_id=ctx.user_id,
+            label=label,
+        )
+
+        return JSONResponse({
+            "api_key": raw_key,
+            "key_id": key_id,
+            "key_prefix": key_prefix,
+            "label": label,
+            "message": "API key generated. Store it securely — it cannot be retrieved again.",
+        })
+    except Exception as exc:  # noqa: BLE001
+        logger.error("API key generation failed: %s", sanitize_evidence(str(exc)))
+        return JSONResponse({"error": sanitize_evidence(str(exc))}, status_code=400)
+
+
+async def install_list_keys(request: Request) -> JSONResponse:
+    """List API keys for the authenticated user (prefix only, never full key)."""
+    try:
+        ctx = await _resolve_ui_context(request)
+    except AuthenticationError as e:
+        return JSONResponse({"error": "unauthorized", "message": sanitize_evidence(str(e))}, status_code=401)
+    except AuthorizationError as e:
+        return JSONResponse({"error": "forbidden", "message": sanitize_evidence(str(e))}, status_code=403)
+
+    keys = repo.list_api_keys(company_id=ctx.company_id, user_id=ctx.user_id)
+    return JSONResponse(keys)
+
+
+async def install_revoke_key(request: Request) -> JSONResponse:
+    """Revoke an API key so it can no longer authenticate MCP requests."""
+    try:
+        ctx = await _resolve_ui_context(request)
+    except AuthenticationError as e:
+        return JSONResponse({"error": "unauthorized", "message": sanitize_evidence(str(e))}, status_code=401)
+    except AuthorizationError as e:
+        return JSONResponse({"error": "forbidden", "message": sanitize_evidence(str(e))}, status_code=403)
+
+    try:
+        data = await request.json()
+        key_id = data.get("key_id", "").strip()
+        if not key_id:
+            return JSONResponse({"error": "key_id is required"}, status_code=400)
+        revoked = repo.revoke_api_key(key_id=key_id, company_id=ctx.company_id)
+        if not revoked:
+            return JSONResponse({"error": "Key not found or already revoked"}, status_code=404)
+        return JSONResponse({"status": "revoked", "key_id": key_id})
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"error": sanitize_evidence(str(exc))}, status_code=400)
+
+
+def _resolve_api_key_context(raw_token: str) -> RequestContext | None:
+    """Resolve a RequestContext from an OPM API key (opm_...) instead of a Cognito JWT."""
+    key_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+    key_record = repo.get_api_key_by_hash(key_hash)
+    if not key_record:
+        return None
+
+    company = repo.get_company(key_record["company_id"])
+    if not company or company.status != CompanyStatus.ACTIVE:
+        return None
+
+    user = repo.get_user(key_record["user_id"])
+    if not user or user.status != "active":
+        return None
+
+    membership = repo.get_membership(company.company_id, user.user_id)
+    if not membership or membership.status != MembershipStatus.ACTIVE:
+        return None
+
+    # Update last_used_at (best-effort)
+    try:
+        repo.touch_api_key_usage(key_record["key_id"])
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Failed to touch API key usage: %s", exc)
+
+    return RequestContext(
+        company_id=company.company_id,
+        company_slug=company.company_slug,
+        user_id=user.user_id,
+        email=user.email,
+        role=membership.role,
+        client_agent="api-key",
+    )
+
+
+
 async def downstream_auth_config(request: Request) -> JSONResponse:
     """Return public Cognito OAuth metadata needed by the browser PKCE client."""
     host = request.headers.get(
@@ -600,29 +969,48 @@ class CompanyMCPHandler:
             await res(scope, receive, send)
             return
 
-        try:
-            claims = token_verifier.verify_token(token)
-            req_ctx = resolve_authenticated_context(
-                claims=claims,
-                company_slug=company_slug,
-                repo=repo,
-                client_agent=client_agent,
-            )
-        except AuthenticationError as e:
-            res = JSONResponse(
-                {"error": "unauthorized", "message": sanitize_evidence(str(e))},
-                status_code=401,
-                headers={"WWW-Authenticate": 'Bearer error="invalid_token"'},
-            )
-            await res(scope, receive, send)
-            return
-        except AuthorizationError as e:
-            res = JSONResponse(
-                {"error": "forbidden", "message": sanitize_evidence(str(e))},
-                status_code=403,
-            )
-            await res(scope, receive, send)
-            return
+        # API key authentication (persistent keys starting with opm_)
+        if token.startswith("opm_"):
+            req_ctx = _resolve_api_key_context(token)
+            if not req_ctx:
+                res = JSONResponse(
+                    {"error": "unauthorized", "message": "Invalid or revoked API key."},
+                    status_code=401,
+                    headers={"WWW-Authenticate": 'Bearer error="invalid_token"'},
+                )
+                await res(scope, receive, send)
+                return
+            if req_ctx.company_slug != company_slug:
+                res = JSONResponse(
+                    {"error": "forbidden", "message": "API key is not authorized for this company."},
+                    status_code=403,
+                )
+                await res(scope, receive, send)
+                return
+        else:
+            try:
+                claims = token_verifier.verify_token(token)
+                req_ctx = resolve_authenticated_context(
+                    claims=claims,
+                    company_slug=company_slug,
+                    repo=repo,
+                    client_agent=client_agent,
+                )
+            except AuthenticationError as e:
+                res = JSONResponse(
+                    {"error": "unauthorized", "message": sanitize_evidence(str(e))},
+                    status_code=401,
+                    headers={"WWW-Authenticate": 'Bearer error="invalid_token"'},
+                )
+                await res(scope, receive, send)
+                return
+            except AuthorizationError as e:
+                res = JSONResponse(
+                    {"error": "forbidden", "message": sanitize_evidence(str(e))},
+                    status_code=403,
+                )
+                await res(scope, receive, send)
+                return
 
         # Forward directly into FastMCP Streamable HTTP app
         target_scope = dict(scope)
@@ -654,6 +1042,11 @@ def create_app() -> Starlette:
             Route("/admin/downstreams/auth-config", downstream_auth_config, methods=["GET"]),
             Route("/admin/downstreams/register", downstream_register, methods=["POST"]),
             Route("/admin/downstreams/status", downstream_status, methods=["GET"]),
+            Route("/install", install_page, methods=["GET"]),
+            Route("/install/auth-config", install_auth_config, methods=["GET"]),
+            Route("/install/api-key", install_generate_key, methods=["POST"]),
+            Route("/install/api-keys", install_list_keys, methods=["GET"]),
+            Route("/install/api-key/revoke", install_revoke_key, methods=["POST"]),
             Route(
                 "/.well-known/oauth-authorization-server",
                 oauth_discovery,

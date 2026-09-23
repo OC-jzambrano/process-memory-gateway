@@ -385,3 +385,119 @@ def test_health_ready_probe_503_does_not_leak_paths(auth_setup, monkeypatch):
     assert "nonexistent" not in res_text
     assert "private" not in res_text
     assert "sqlite" not in res_text
+
+
+def test_install_page_loads(auth_setup):
+    """Verify /install serves HTML with config for Antigravity, Claude, and Codex."""
+    client = auth_setup["client"]
+    res = client.get("/install")
+    assert res.status_code == 200
+    assert "text/html" in res.headers["content-type"]
+    text = res.text
+    assert "Process Memory Gateway" in text
+    assert "Antigravity Desktop" in text
+    assert "Antigravity CLI" in text
+    assert "Claude Desktop" in text
+    assert "Codex" in text
+    assert "mcp_config.json" in text
+    assert ".mcp.json" in text
+    assert "claude_desktop_config.json" in text
+
+
+def test_install_auth_config(auth_setup):
+    """Verify /install/auth-config returns valid OAuth/PKCE discovery parameters."""
+    client = auth_setup["client"]
+    res = client.get("/install/auth-config")
+    assert res.status_code == 200
+    data = res.json()
+    assert "client_id" in data
+    assert "redirect_uri" in data
+    assert data["redirect_uri"].endswith("/install")
+    assert "authorization_endpoint" in data
+    assert "token_endpoint" in data
+
+
+def test_install_api_key_lifecycle(auth_setup):
+    """Test generating, listing, authenticating with, and revoking API keys."""
+    client = auth_setup["client"]
+    token = make_token(auth_setup["private_key"], sub="sub-alice-12345")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # 1. Unauthenticated request should fail
+    resp = client.post("/install/api-key?company=company_a", json={"label": "test-key"})
+    assert resp.status_code == 401
+
+    # 2. Authenticated request generates an API key
+    resp = client.post(
+        "/install/api-key?company=company_a",
+        json={"label": "test-key"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    key_data = resp.json()
+    assert "api_key" in key_data
+    api_key = key_data["api_key"]
+    assert api_key.startswith("opm_")
+    key_id = key_data["key_id"]
+    assert key_data["label"] == "test-key"
+
+    # 3. List keys for the user
+    resp = client.get("/install/api-keys?company=company_a", headers=headers)
+    assert resp.status_code == 200
+    keys = resp.json()
+    assert len(keys) >= 1
+    found = [k for k in keys if k["key_id"] == key_id]
+    assert len(found) == 1
+    assert found[0]["status"] == "active"
+    assert found[0]["label"] == "test-key"
+    assert "api_key" not in found[0]
+
+    # 4. Use the API key against the MCP endpoint
+    mcp_headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "application/json, text/event-stream",
+    }
+    mcp_resp = client.post(
+        "/companies/company_a/mcp",
+        headers=mcp_headers,
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+    )
+    assert mcp_resp.status_code == 200
+
+    # 5. Using key against wrong company should be 403 Forbidden
+    mcp_resp_wrong = client.post(
+        "/companies/company_b/mcp",
+        headers=mcp_headers,
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+    )
+    assert mcp_resp_wrong.status_code == 403
+
+    # 6. Revoke the key
+    revoke_resp = client.post(
+        "/install/api-key/revoke?company=company_a",
+        json={"key_id": key_id},
+        headers=headers,
+    )
+    assert revoke_resp.status_code == 200
+    assert revoke_resp.json()["status"] == "revoked"
+
+    # 7. Use revoked key against MCP endpoint -> 401
+    mcp_resp_revoked = client.post(
+        "/companies/company_a/mcp",
+        headers=mcp_headers,
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+    )
+    assert mcp_resp_revoked.status_code == 401
+
+
+def test_invalid_api_key(auth_setup):
+    """Verify invalid opm_ key returns 401."""
+    client = auth_setup["client"]
+    headers = {"Authorization": "Bearer opm_invalidkey1234567890"}
+    resp = client.post(
+        "/companies/company_a/mcp",
+        headers=headers,
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+    )
+    assert resp.status_code == 401
+
