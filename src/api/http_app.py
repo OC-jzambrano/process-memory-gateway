@@ -470,7 +470,13 @@ color:white;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor
   <p style='font-size:13px;color:var(--muted);margin-bottom:12px'>
     This key never expires and replaces short-lived Cognito tokens in your AI client config.</p>
   <div class='flex-row'>
-    <input id='key_label' placeholder='Label (e.g. my-laptop)' value='default' style='max-width:220px'>
+    <select id='key_label' style='max-width:220px; padding: 10px 12px; background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text);'>
+      <option value='Antigravity Desktop'>Antigravity Desktop</option>
+      <option value='Antigravity CLI'>Antigravity CLI</option>
+      <option value='Claude Desktop'>Claude Desktop</option>
+      <option value='Codex'>Codex (OpenAI)</option>
+      <option value='Other'>Other</option>
+    </select>
     <button id='btn_gen_key' class='btn-primary'>Generate API Key</button>
   </div>
   <div id='new_key_display' class='hidden'>
@@ -478,7 +484,7 @@ color:white;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor
       <span id='new_key_value'></span>
       <span class='warn'>&#9888; Copy this key now &mdash; it will not be shown again.</span>
     </div>
-    <button class='btn-secondary btn-sm' onclick="navigator.clipboard.writeText(document.getElementById('new_key_value').textContent).then(()=>{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy Key',1500)})">Copy Key</button>
+    <button class='btn-secondary btn-sm' onclick="navigator.clipboard?navigator.clipboard.writeText(document.getElementById('new_key_value').textContent).then(()=>{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy Key',1500)}):alert('Please copy the key manually (clipboard requires HTTPS).')">Copy Key</button>
   </div>
   <div id='existing_keys' class='existing-keys'></div>
 </div>
@@ -503,14 +509,23 @@ function gb(){const t=sessionStorage.getItem('opmAccessToken')||'';return t?'Bea
 function sc(){const c=gc();AC.value=c;localStorage.setItem('opmCompany',c);const u=new URL(location);u.searchParams.set('company',c);history.replaceState({},'',u)}
 function esc(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 async function login(){
-  const cfg=await fetch('/install/auth-config').then(r=>r.json());
-  const b64u=b=>btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/,'');
-  const v=b64u(crypto.getRandomValues(new Uint8Array(32)));
-  const ch=b64u(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(v)));
-  const st=b64u(crypto.getRandomValues(new Uint8Array(24)));
-  sessionStorage.setItem('opmPkceVerifier',v);sessionStorage.setItem('opmOAuthState',st);sc();
-  const p=new URLSearchParams({response_type:'code',client_id:cfg.client_id,redirect_uri:cfg.redirect_uri,scope:cfg.scope,state:st,code_challenge:ch,code_challenge_method:'S256'});
-  location.assign(cfg.authorization_endpoint+'?'+p)
+  try {
+    AS.className='status-badge pending';AS.textContent='Redirecting...';
+    const cfg=await fetch('/install/auth-config').then(r=>r.json());
+    const b64u=b=>btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+    const v=b64u(crypto.getRandomValues(new Uint8Array(32)));
+    let ch=v, m='plain';
+    if(crypto.subtle){
+      ch=b64u(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(v)));
+      m='S256';
+    }
+    const st=b64u(crypto.getRandomValues(new Uint8Array(24)));
+    sessionStorage.setItem('opmPkceVerifier',v);sessionStorage.setItem('opmOAuthState',st);sc();
+    const p=new URLSearchParams({response_type:'code',client_id:cfg.client_id,redirect_uri:cfg.redirect_uri,scope:cfg.scope,state:st,code_challenge:ch,code_challenge_method:m});
+    location.assign(cfg.authorization_endpoint+'?'+p)
+  } catch(e) {
+    AS.className='status-badge err';AS.textContent='Login error: '+e.message;
+  }
 }
 async function completeLogin(){
   const p=new URLSearchParams(location.search),code=p.get('code');if(!code)return;
@@ -575,7 +590,7 @@ function renderClients(){
     h+='<div class="client-card'+(i===0?' open':'')+'">'
       +'<div class="client-header" onclick="this.parentElement.classList.toggle(\'open\')"><span class="chevron">&#9654;</span><h3>'+esc(c.name)+'</h3><span class="client-badge">'+esc(c.badge)+'</span></div>'
       +'<div class="client-body"><div class="file-path">'+esc(c.path)+'</div>'
-      +'<div class="config-block"><button class="copy-btn" onclick="event.stopPropagation();const p=this.parentElement.querySelector(\'pre\');navigator.clipboard.writeText(p.textContent).then(()=>{this.textContent=\'Copied!\';setTimeout(()=>this.textContent=\'Copy\',1500)})">Copy</button>'
+      +'<div class="config-block"><button class="copy-btn" onclick="event.stopPropagation();const p=this.parentElement.querySelector(\'pre\');navigator.clipboard?navigator.clipboard.writeText(p.textContent).then(()=>{this.textContent=\'Copied!\';setTimeout(()=>this.textContent=\'Copy\',1500)}):alert(\'Please copy manually (HTTPS required).\')">Copy</button>'
       +'<pre>'+esc(c.config)+'</pre></div>'
       +'<div class="instructions"><ol>';
     c.steps.forEach(s=>{h+='<li>'+s+'</li>'});
