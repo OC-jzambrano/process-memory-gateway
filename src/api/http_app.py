@@ -512,7 +512,7 @@ async function login(){
   try {
     AS.className='status-badge pending';AS.textContent='Redirecting...';
     const cfg=await fetch('/install/auth-config').then(r=>r.json());
-    const b64u=b=>btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+    const b64u=b=>btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/,'');
     const v=b64u(crypto.getRandomValues(new Uint8Array(32)));
     let ch=v, m='plain';
     if(crypto.subtle){
