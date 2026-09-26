@@ -32,7 +32,7 @@ from src.config import (
     DOMAIN_NAME,
     MCP_RESOURCE_URL,
 )
-from src.models.enums import CompanyStatus, MembershipStatus
+from src.models.enums import CompanyStatus, MembershipStatus, RoleType
 from src.models.schemas import RequestContext
 from src.orchestration.dispatcher import DownstreamDispatcher
 from src.storage.db import get_connection
@@ -440,6 +440,17 @@ color:white;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor
 .existing-keys table{width:100%;border-collapse:collapse;font-size:13px;margin-top:12px}
 .existing-keys th{text-align:left;padding:8px;color:var(--muted);border-bottom:1px solid var(--border)}
 .existing-keys td{padding:8px;border-bottom:1px solid var(--border)}
+.panel-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.service-card{border:1px solid var(--border);border-radius:8px;padding:14px;margin-top:10px;background:rgba(15,23,42,.42)}
+.service-card header{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.service-card h3{font-size:14px;flex:1}
+.service-card small{color:var(--muted);word-break:break-all}
+.service-actions{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.help-line{font-size:12px;color:var(--muted);margin-top:8px}
+select,textarea{padding:10px 12px;background:var(--code-bg);border:1px solid var(--border);
+border-radius:6px;color:var(--text);font-size:14px;width:100%}
+textarea{min-height:68px;resize:vertical}
+@media(max-width:720px){.row,.panel-grid{grid-template-columns:1fr}.container{padding:20px 14px}}
 .hidden{display:none!important}
 .flex-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .chevron{transition:transform .2s;font-size:12px;color:var(--muted)}
@@ -492,8 +503,48 @@ color:white;border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor
 <div class='step' id='step_install'>
   <h2><span class='step-num'>3</span> Add to your AI client</h2>
   <p style='font-size:13px;color:var(--muted);margin-bottom:16px'>
-    Click your AI client below, copy the config, and paste it into the indicated file.</p>
+    Pick a client, copy or download the config, then open that client's MCP settings.</p>
   <div id='client_cards'></div>
+</div>
+
+<div class='step' id='step_services'>
+  <h2><span class='step-num'>4</span> Connected services</h2>
+  <div class='panel-grid'>
+    <div>
+      <label>Service ID</label>
+      <input id='svc_id' placeholder='odoo-main'>
+    </div>
+    <div>
+      <label>Transport</label>
+      <select id='svc_transport'>
+        <option value='odoo_xmlrpc'>Odoo XML-RPC</option>
+        <option value='streamable_http'>Streamable HTTP MCP</option>
+        <option value='stdio'>stdio MCP</option>
+      </select>
+    </div>
+    <div>
+      <label>Endpoint</label>
+      <input id='svc_endpoint' placeholder='https://community.odooconcept.com'>
+    </div>
+    <div>
+      <label>Secrets Manager ARN</label>
+      <input id='svc_secret' placeholder='arn:aws:secretsmanager:...'>
+    </div>
+    <div>
+      <label>Odoo user</label>
+      <input id='svc_user' placeholder='process-memory-pilot'>
+    </div>
+    <div>
+      <label>Odoo password or API key</label>
+      <input id='svc_pass' type='password'>
+    </div>
+  </div>
+  <div class='flex-row' style='margin-top:12px'>
+    <button id='btn_save_service' class='btn-primary'>Save service</button>
+    <button id='btn_refresh_services' class='btn-secondary btn-sm'>Refresh</button>
+  </div>
+  <p class='help-line'>For Odoo, enter user/password once. The server stores them in AWS Secrets Manager and only keeps the secret reference.</p>
+  <div id='services_list'></div>
 </div>
 </div>
 
@@ -502,7 +553,12 @@ const AC=document.getElementById('auth_company'),AS=document.getElementById('aut
 BL=document.getElementById('btn_login'),BO=document.getElementById('btn_logout'),
 BG=document.getElementById('btn_gen_key'),KL=document.getElementById('key_label'),
 NKD=document.getElementById('new_key_display'),NKV=document.getElementById('new_key_value'),
-EK=document.getElementById('existing_keys'),CC=document.getElementById('client_cards');
+EK=document.getElementById('existing_keys'),CC=document.getElementById('client_cards'),
+SI=document.getElementById('svc_id'),ST=document.getElementById('svc_transport'),
+SE=document.getElementById('svc_endpoint'),SS=document.getElementById('svc_secret'),
+SU=document.getElementById('svc_user'),SP=document.getElementById('svc_pass'),
+BS=document.getElementById('btn_save_service'),BR=document.getElementById('btn_refresh_services'),
+SL=document.getElementById('services_list');
 let curKey=null;
 function safeGet(t,k){try{return window[t].getItem(k)||''}catch(e){return ''}}
 function safeSet(t,k,v){try{window[t].setItem(k,v)}catch(e){console.warn('Storage blocked:',e)}}
@@ -511,6 +567,8 @@ function gc(){return AC.value.trim()||new URLSearchParams(location.search).get('
 function gb(){const t=safeGet('sessionStorage','opmAccessToken');return t?'Bearer '+t:''}
 function sc(){const c=gc();AC.value=c;safeSet('localStorage','opmCompany',c);const u=new URL(location);u.searchParams.set('company',c);history.replaceState({},'',u)}
 function esc(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function copyText(t){return navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject(new Error('Clipboard requires HTTPS'))}
+function downloadText(name,text){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type:'application/json'}));a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
 async function login(){
   try {
     AS.className='status-badge pending';AS.textContent='Redirecting...';
@@ -560,7 +618,7 @@ async function loadKeys(){
     if(!r.ok)return;const keys=await r.json();
     if(!keys.length){EK.innerHTML='<p style="font-size:13px;color:var(--muted)">No keys yet.</p>';return}
     let h='<table><tr><th>Prefix</th><th>Label</th><th>Created</th><th>Last Used</th><th></th></tr>';
-    keys.forEach(k=>{h+='<tr><td><code>'+esc(k.key_prefix)+'...</code></td><td>'+esc(k.label)+'</td><td>'+(k.created_at||'').slice(0,10)+'</td><td>'+(k.last_used_at||'never')+'</td><td>'+(k.status==='active'?"<button class='btn-danger' onclick=\"revokeKey('"+k.key_id+"')\">Revoke</button>":'<em>revoked</em>')+'</td></tr>'});
+    keys.forEach(k=>{const kid=esc(k.key_id);h+='<tr><td><code>'+esc(k.key_prefix)+'...</code></td><td>'+esc(k.label)+'</td><td>'+(k.created_at||'').slice(0,10)+'</td><td>'+(k.last_used_at||'never')+'</td><td>'+(k.status==='active'?'<button class="btn-danger" onclick="revokeKey(&quot;'+kid+'&quot;)">Revoke</button>':'<em>revoked</em>')+'</td></tr>'});
     EK.innerHTML=h+'</table>';if(!curKey&&keys.some(k=>k.status==='active'))renderClients()
   }catch(e){console.error(e)}
 }
@@ -573,33 +631,76 @@ function renderClients(){
   const clients=[
     {name:'Antigravity Desktop',badge:'Recommended',
      path:'Settings > Customizations > Open MCP Config',
+     open:'antigravity://settings/mcp',
      config:JSON.stringify({mcpServers:{"process-memory":{serverUrl:url,headers:{Authorization:bv}}}},null,2),
+     file:'antigravity-mcp.json',
      steps:['Open Antigravity Desktop','Go to <b>Settings &rarr; Customizations</b>','Click <b>Open MCP Config</b>','Replace contents with the config below','Click <b>Refresh</b> in Installed MCP Servers']},
     {name:'Antigravity CLI (agy)',badge:'Developers',
      path:'.mcp.json (project root) or global mcp_config.json',
+     open:null,
      config:JSON.stringify({mcpServers:{"process-memory":{serverUrl:url,headers:{Authorization:bv}}}},null,2),
+     file:'.mcp.json',
      steps:['Create or edit <b>.mcp.json</b> in your project root','Paste the config below','Run <b>agy</b> &mdash; the server appears automatically']},
     {name:'Claude Desktop',badge:'Anthropic',
      path:navigator.platform.includes('Win')?'%APPDATA%\\Claude\\claude_desktop_config.json':navigator.platform.includes('Mac')?'~/Library/Application Support/Claude/claude_desktop_config.json':'~/.config/claude/claude_desktop_config.json',
+     open:'claude://settings/developer',
      config:JSON.stringify({mcpServers:{"process-memory":{command:"npx",args:["-y","@anthropic/mcp-remote",url,"--header","Authorization: "+bv]}}},null,2),
+     file:'claude_desktop_config.json',
      steps:['Open Claude Desktop &rarr; <b>Settings &rarr; Developer &rarr; Edit Config</b>','Paste the config below','Restart Claude Desktop','The process-memory tools will appear in chat']},
     {name:'Codex (OpenAI)',badge:'OpenAI',
      path:'.codex/mcp.json',
+     open:null,
      config:JSON.stringify({mcpServers:{"process-memory":{type:"url",url:url,headers:{Authorization:bv}}}},null,2),
+     file:'codex-mcp.json',
      steps:['Create <b>.codex/mcp.json</b> in your project root','Paste the config below','Run <b>codex</b> &mdash; it discovers the MCP server']}
   ];
   let h='';
   clients.forEach((c,i)=>{
     h+='<div class="client-card'+(i===0?' open':'')+'">'
-      +'<div class="client-header" onclick="this.parentElement.classList.toggle(\'open\')"><span class="chevron">&#9654;</span><h3>'+esc(c.name)+'</h3><span class="client-badge">'+esc(c.badge)+'</span></div>'
+      +'<div class="client-header" onclick="this.parentElement.classList.toggle(&quot;open&quot;)"><span class="chevron">&#9654;</span><h3>'+esc(c.name)+'</h3><span class="client-badge">'+esc(c.badge)+'</span></div>'
       +'<div class="client-body"><div class="file-path">'+esc(c.path)+'</div>'
-      +'<div class="config-block"><button class="copy-btn" onclick="event.stopPropagation();const p=this.parentElement.querySelector(\'pre\');navigator.clipboard?navigator.clipboard.writeText(p.textContent).then(()=>{this.textContent=\'Copied!\';setTimeout(()=>this.textContent=\'Copy\',1500)}):alert(\'Please copy manually (HTTPS required).\')">Copy</button>'
+      +'<div class="flex-row" style="margin-bottom:10px">'
+      +(c.open?'<button class="btn-secondary btn-sm" onclick="location.href=&quot;'+esc(c.open)+'&quot;">Open client settings</button>':'')
+      +'<button class="btn-secondary btn-sm" onclick="downloadText(&quot;'+esc(c.file)+'&quot;,'+JSON.stringify(c.config).replace(/"/g,'&quot;')+')">Download config</button>'
+      +'</div>'
+      +'<div class="config-block"><button class="copy-btn" onclick="event.stopPropagation();const p=this.parentElement.querySelector(&quot;pre&quot;);copyText(p.textContent).then(()=>{this.textContent=&quot;Copied!&quot;;setTimeout(()=>this.textContent=&quot;Copy&quot;,1500)}).catch(()=>alert(&quot;Please copy manually.&quot;))">Copy</button>'
       +'<pre>'+esc(c.config)+'</pre></div>'
       +'<div class="instructions"><ol>';
     c.steps.forEach(s=>{h+='<li>'+s+'</li>'});
     h+='</ol></div></div></div>'
   });
   CC.innerHTML=h
+}
+async function loadServices(){
+  const b=gb(),c=gc();if(!b){SL.innerHTML='<p class="help-line">Sign in to manage services.</p>';return}
+  SL.innerHTML='<p class="help-line">Loading services...</p>';
+  try{const r=await fetch('/install/downstreams?company='+encodeURIComponent(c),{headers:{Authorization:b}});
+    const d=await r.json();if(!r.ok){SL.innerHTML='<p class="help-line">'+esc(d.message||d.error||'Could not load services')+'</p>';return}
+    if(!d.servers.length){SL.innerHTML='<p class="help-line">No services connected yet.</p>';return}
+    let h='';d.servers.forEach(s=>{const sid=esc(s.server_id),tr=esc(s.transport),ep=esc(s.endpoint);h+='<div class="service-card"><header><h3>'+sid+'</h3><span class="status-badge '+(s.ready?'ok':'err')+'">'+(s.ready?'Ready':'Needs attention')+'</span></header>'
+      +'<small>'+esc(s.transport)+' · '+esc(s.endpoint)+'</small><p class="help-line">'+esc(s.state)+'</p>'
+      +'<div class="service-actions"><button class="btn-secondary btn-sm" onclick="editService(&quot;'+sid+'&quot;,&quot;'+tr+'&quot;,&quot;'+ep+'&quot;)">Edit</button>'
+      +'<button class="btn-danger" onclick="deleteService(&quot;'+sid+'&quot;)">Delete</button></div></div>'});
+    SL.innerHTML=h
+  }catch(e){SL.innerHTML='<p class="help-line">Network error: '+esc(e.message)+'</p>'}
+}
+function editService(id,t,e){SI.value=id;ST.value=t;SE.value=e;SS.value='';SU.value='';SP.value='';SI.focus()}
+BS.onclick=async()=>{
+  const b=gb(),c=gc();if(!b){alert('Sign in first.');return}
+  const payload={server_id:SI.value.trim(),transport:ST.value,endpoint:SE.value.trim(),secret_ref:SS.value.trim(),username:SU.value.trim(),password:SP.value};
+  if(!payload.server_id||!payload.endpoint){alert('Service ID and endpoint are required.');return}
+  BS.disabled=true;BS.textContent='Saving...';
+  try{const r=await fetch('/admin/downstreams/register?company='+encodeURIComponent(c),{method:'POST',headers:{'Content-Type':'application/json',Authorization:b},body:JSON.stringify(payload)});
+    const d=await r.json();if(!r.ok){alert(d.error||d.message||'Save failed');return}
+    SS.value='';SP.value='';await loadServices()
+  }catch(e){alert('Error: '+e.message)}
+  finally{BS.disabled=false;BS.textContent='Save service'}
+};
+BR.onclick=()=>loadServices();
+async function deleteService(id){if(!confirm('Delete '+id+'?'))return;const b=gb(),c=gc();
+  const r=await fetch('/install/downstreams/'+encodeURIComponent(id)+'?company='+encodeURIComponent(c),{method:'DELETE',headers:{Authorization:b}});
+  if(!r.ok){const d=await r.json().catch(()=>({error:'Delete failed'}));alert(d.error||d.message||'Delete failed');return}
+  loadServices()
 }
 // Init
 (function(){
@@ -610,7 +711,7 @@ function renderClients(){
     completeLogin().then(async()=>{
       const b=gb();if(!b){AS.className='status-badge err';AS.textContent='Sign-in required';return}
       try{const c=gc(),r=await fetch('/install/api-keys?company='+encodeURIComponent(c),{headers:{Authorization:b}});
-        if(r.ok){AS.className='status-badge ok';AS.textContent='Authenticated';loadKeys()}
+        if(r.ok){AS.className='status-badge ok';AS.textContent='Authenticated';loadKeys();loadServices()}
         else if(r.status===401){safeRem('sessionStorage','opmAccessToken');AS.className='status-badge err';AS.textContent='Session expired'}
         else{AS.className='status-badge err';AS.textContent='Error ('+r.status+')'}
       }catch(e){AS.className='status-badge err';AS.textContent='Network error'}
@@ -727,6 +828,75 @@ async def install_revoke_key(request: Request) -> JSONResponse:
         return JSONResponse({"status": "revoked", "key_id": key_id})
     except Exception as exc:  # noqa: BLE001
         return JSONResponse({"error": sanitize_evidence(str(exc))}, status_code=400)
+
+
+async def install_list_downstreams(request: Request) -> JSONResponse:
+    """List registered downstream services with a lightweight readiness probe."""
+    try:
+        ctx = await _resolve_ui_context(request)
+    except AuthenticationError as e:
+        return JSONResponse({"error": "unauthorized", "message": sanitize_evidence(str(e))}, status_code=401)
+    except AuthorizationError as e:
+        return JSONResponse({"error": "forbidden", "message": sanitize_evidence(str(e))}, status_code=403)
+
+    set_current_context(ctx)
+    try:
+        servers = get_default_service().list_downstream_mcps()
+        payload = []
+        for server in servers:
+            ready = False
+            state = "registered, awaiting connection check"
+            tool_count = len(server.available_tools)
+            try:
+                probe = DownstreamDispatcher(repo).probe(server)
+                tool_count = len(probe.get("tools", []))
+                state = f"connected and ready: {tool_count} tool(s) discovered"
+                ready = True
+            except Exception as exc:  # noqa: BLE001 - status endpoint reports probe failures
+                state = f"not ready: {sanitize_evidence(str(exc))}"
+            payload.append(
+                {
+                    "server_id": server.server_id,
+                    "endpoint": server.endpoint,
+                    "transport": server.transport.value,
+                    "tool_count": tool_count,
+                    "ready": ready,
+                    "state": state,
+                    "created_at": server.created_at,
+                    "updated_at": server.updated_at,
+                }
+            )
+        return JSONResponse({"servers": payload})
+    finally:
+        set_current_context(None)
+
+
+async def install_delete_downstream(request: Request) -> JSONResponse:
+    """Delete a registered downstream service for the authenticated company."""
+    try:
+        ctx = await _resolve_ui_context(request)
+    except AuthenticationError as e:
+        return JSONResponse({"error": "unauthorized", "message": sanitize_evidence(str(e))}, status_code=401)
+    except AuthorizationError as e:
+        return JSONResponse({"error": "forbidden", "message": sanitize_evidence(str(e))}, status_code=403)
+
+    server_id = request.path_params.get("server_id", "").strip()
+    if not server_id:
+        return JSONResponse({"error": "server_id is required"}, status_code=400)
+    try:
+        get_default_service().auth_resolver.require_role(
+            ctx,
+            [RoleType.OWNER, RoleType.REVIEWER],
+        )
+    except AuthorizationError as e:
+        return JSONResponse({"error": "forbidden", "message": sanitize_evidence(str(e))}, status_code=403)
+    deleted = repo.delete_downstream_mcp(
+        company_id=ctx.company_id,
+        server_id=server_id,
+    )
+    if not deleted:
+        return JSONResponse({"error": "Service not found"}, status_code=404)
+    return JSONResponse({"status": "deleted", "server_id": server_id})
 
 
 def _resolve_api_key_context(raw_token: str) -> RequestContext | None:
@@ -1083,6 +1253,12 @@ def create_app() -> Starlette:
             Route("/install/api-key", install_generate_key, methods=["POST"]),
             Route("/install/api-keys", install_list_keys, methods=["GET"]),
             Route("/install/api-key/revoke", install_revoke_key, methods=["POST"]),
+            Route("/install/downstreams", install_list_downstreams, methods=["GET"]),
+            Route(
+                "/install/downstreams/{server_id}",
+                install_delete_downstream,
+                methods=["DELETE"],
+            ),
             Route(
                 "/.well-known/oauth-authorization-server",
                 oauth_discovery,
