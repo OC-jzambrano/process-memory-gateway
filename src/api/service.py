@@ -56,21 +56,17 @@ def _default_odoo_xmlrpc_tools() -> list[DownstreamToolDefinition]:
                 "required": ["model", "values"],
             },
         ),
-        DownstreamToolDefinition(
-            name="execute_kw",
-            description="Execute an Odoo model method via XML-RPC using explicit model, method, args, and kwargs.",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "model": {"type": "string"},
-                    "method": {"type": "string"},
-                    "args": {"type": "array"},
-                    "kwargs": {"type": "object"},
-                },
-                "required": ["model", "method"],
-            },
-        ),
     ]
+
+
+def _public_downstream_server(server: DownstreamMCPServer) -> DownstreamMCPServer:
+    """Hide arbitrary method execution from models using the legacy XML-RPC bridge."""
+    if server.transport != MCPTransport.ODOO_XMLRPC:
+        return server
+    visible_tools = [tool for tool in server.available_tools if tool.name != "execute_kw"]
+    if len(visible_tools) == len(server.available_tools):
+        return server
+    return server.model_copy(update={"available_tools": visible_tools})
 
 
 class HostedProcessMemoryService:
@@ -117,55 +113,49 @@ class HostedProcessMemoryService:
             process_name="general",
         )
 
-        candidate_id = f"cand_{uuid.uuid4().hex}"
-        rule_text = instruction_text.strip()
-        confidence = 0.95
-        source_quote = instruction_text.strip()
-        rule_type = RuleType.OPERATIONAL_CONSTRAINT
-        severity = Severity.INFO
-        enforcement_mode = EnforcementMode.ADVISORY
+        now = self._now()
+        extracted_candidates = extraction_res.candidates
+        if extracted_candidates:
+            candidates = [
+                candidate.model_copy(
+                    update={
+                        "client_id": ctx.company_id,
+                        "process_name": "general",
+                        "status": RuleStatus.PENDING_REVIEW,
+                        "structured_scope": context_hint
+                        or candidate.structured_scope
+                        or ActionContext(),
+                        "created_at": now,
+                        "updated_at": now,
+                    }
+                )
+                for candidate in extracted_candidates
+            ]
+        else:
+            # Keep the existing behavior for vague instructions the extractor
+            # cannot confidently classify: stage the text for a human to inspect.
+            candidates = [
+                CandidateRule(
+                    candidate_id=f"cand_{uuid.uuid4().hex}",
+                    session_id=extraction_res.session_id,
+                    client_id=ctx.company_id,
+                    process_name="general",
+                    rule_text=instruction_text.strip(),
+                    rule_type=RuleType.OPERATIONAL_CONSTRAINT,
+                    severity=Severity.INFO,
+                    enforcement_mode=EnforcementMode.ADVISORY,
+                    source_quote=instruction_text.strip(),
+                    confidence=0.95,
+                    status=RuleStatus.PENDING_REVIEW,
+                    structured_scope=context_hint or ActionContext(),
+                    created_at=now,
+                    updated_at=now,
+                )
+            ]
 
-        first_candidate = None
-        if extraction_res.candidates:
-            first_candidate = extraction_res.candidates[0]
-            rule_text = first_candidate.rule_text
-            confidence = first_candidate.confidence
-            source_quote = first_candidate.source_quote
-            rule_type = first_candidate.rule_type
-            severity = first_candidate.severity
-            enforcement_mode = first_candidate.enforcement_mode
-
-        # Structured Scope & Constraint Mapping
-        scope = context_hint or (
-            first_candidate.structured_scope
-            if first_candidate and first_candidate.structured_scope
-            else ActionContext()
-        )
-
-        # Use constraint only if explicitly detected by extractor
-        constraint = (
-            first_candidate.structured_constraint
-            if first_candidate and first_candidate.structured_constraint
-            else None
-        )
-
-        candidate = CandidateRule(
-            candidate_id=candidate_id,
-            session_id=extraction_res.session_id,
-            client_id=ctx.company_id,
-            process_name="general",
-            rule_text=rule_text,
-            rule_type=rule_type,
-            severity=severity,
-            enforcement_mode=enforcement_mode,
-            source_quote=source_quote,
-            confidence=confidence,
-            status=RuleStatus.PENDING_REVIEW,
-            structured_scope=scope,
-            structured_constraint=constraint,
-            created_at=self._now(),
-            updated_at=self._now(),
-        )
+        first_candidate = candidates[0]
+        scope = first_candidate.structured_scope or ActionContext()
+        constraint = first_candidate.structured_constraint
 
         # 1. Create Extraction Session (provenance anchor)
         self.repo.create_session(
@@ -176,25 +166,27 @@ class HostedProcessMemoryService:
                 source_type=SourceType.USER_INTERACTION,
                 interaction_text=instruction_text,
                 model_id=getattr(self.extractor, "model_id", "bedrock-haiku-4.5") or "bedrock",
-                candidates_extracted=1,
-                extracted_at=self._now(),
+                candidates_extracted=len(candidates),
+                extracted_at=now,
             )
         )
 
         # 2. Save candidate
-        self.repo.save_candidates([candidate])
+        self.repo.save_candidates(candidates)
 
         return CandidateResult(
             status="staged",
-            candidate_id=candidate_id,
-            rule_text=rule_text,
+            candidate_id=first_candidate.candidate_id,
+            rule_text=first_candidate.rule_text,
             scope=scope,
             constraint=constraint,
-            confidence=confidence,
+            confidence=first_candidate.confidence,
             message=(
-                f"Candidate rule staged as 'pending_review' (ID: {candidate_id}). "
-                f"It is currently inactive and will NOT be enforced until approved by a company reviewer/owner."
+                f"{len(candidates)} candidate rule(s) staged as 'pending_review'. "
+                "They are inactive and will NOT be enforced until approved by a company reviewer/owner."
             ),
+            candidates=candidates,
+            candidate_count=len(candidates),
         )
 
     # --- 2. LIST MEMORY CANDIDATES ---
@@ -472,7 +464,10 @@ class HostedProcessMemoryService:
 
     def list_downstream_mcps(self) -> list[DownstreamMCPServer]:
         ctx = get_current_context()
-        return self.repo.list_downstream_mcps(company_id=ctx.company_id)
+        return [
+            _public_downstream_server(server)
+            for server in self.repo.list_downstream_mcps(company_id=ctx.company_id)
+        ]
 
     # --- 6. RUN DOWNSTREAM REQUEST (ORCHESTRATION ENTRYPOINT) ---
     def run_downstream_request(
@@ -498,7 +493,7 @@ class HostedProcessMemoryService:
             scope = ActionContext()
 
         # 1. Fetch registered downstream servers for company
-        registered_servers = self.repo.list_downstream_mcps(company_id=ctx.company_id)
+        registered_servers = self.list_downstream_mcps()
         if downstream_hint:
             filtered = [
                 s for s in registered_servers
@@ -894,17 +889,6 @@ class HostedProcessMemoryService:
                 server_id=server.server_id,
                 tool_name="create_record",
                 arguments={"model": payload["model"], "values": payload["values"]},
-            )
-        if "model" in payload and "method" in payload:
-            return OrchestrationToolCall(
-                server_id=server.server_id,
-                tool_name="execute_kw",
-                arguments={
-                    "model": payload["model"],
-                    "method": payload["method"],
-                    "args": payload.get("args", []),
-                    "kwargs": payload.get("kwargs", {}),
-                },
             )
         return None
 

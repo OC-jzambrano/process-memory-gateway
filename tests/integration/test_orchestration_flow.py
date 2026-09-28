@@ -14,6 +14,7 @@ from src.models.schemas import (
     ActionContext,
     CanonicalRule,
     Company,
+    DownstreamToolDefinition,
     Membership,
     OrchestrationToolCall,
     User,
@@ -691,13 +692,27 @@ def test_odoo_xmlrpc_registration_defaults_tools_when_ui_omits_allowlist(multi_t
             secret_ref="arn:aws:secretsmanager:eu-north-1:123:secret:opm/downstream/alpha/odoo",
         )
 
-        assert result.tool_count == 2
+        assert result.tool_count == 1
         server = repo.get_downstream_mcp("co_alpha", "odoo")
         assert server is not None
-        assert [tool.name for tool in server.available_tools] == [
-            "create_record",
-            "execute_kw",
-        ]
+        assert [tool.name for tool in server.available_tools] == ["create_record"]
+
+        # Existing legacy registrations may still contain execute_kw. Hide it
+        # from the model-facing catalog without rewriting persisted state.
+        legacy_server = server.model_copy(
+            update={
+                "available_tools": [
+                    *server.available_tools,
+                    DownstreamToolDefinition(
+                        name="execute_kw",
+                        input_schema={"type": "object", "properties": {}, "required": []},
+                    ),
+                ]
+            }
+        )
+        repo.upsert_downstream_mcp(legacy_server)
+        visible_tools = service.list_downstream_mcps()[0].available_tools
+        assert [tool.name for tool in visible_tools] == ["create_record"]
     finally:
         set_current_context(None)
 

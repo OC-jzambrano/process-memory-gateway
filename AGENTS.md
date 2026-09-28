@@ -2,6 +2,9 @@
 
 When acting as an AI coding agent or assistant (Codex, Claude, Antigravity, or Cursor), follow these operational guidelines:
 
+## Product Acronym
+- OPM stands for **Odoo Process Memory**.
+
 ## Fast Path For Odoo Requests
 - If the user asks to create, update, search, assign, schedule, or modify anything in Odoo, use the `odoo-process-memory.process_execute_action` MCP tool directly.
 - Do not search for Odoo plugins, local credentials, `.codex` backups, XML-RPC scripts, JSON-RPC scripts, or repository utilities before trying `process_execute_action`.

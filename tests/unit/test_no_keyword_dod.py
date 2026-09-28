@@ -84,3 +84,29 @@ def test_no_keyword_dod_mapping_for_general_instructions(clean_service):
     candidates = service.list_memory_candidates()
     assert len(candidates) == 2
     assert all(c.status.value == "pending_review" for c in candidates)
+
+
+def test_one_instruction_stages_each_independent_requirement(clean_service):
+    service, _repo = clean_service
+
+    result = service.remember_company_instruction(
+        instruction_text=(
+            "Todas las tareas deben incluir objetivo y criterios de aceptación, "
+            "y estar en inglés."
+        ),
+        context_hint=ActionContext(
+            system="odoo", application="project", resource="project.task", operation="create"
+        ),
+    )
+
+    assert result.candidate_count == 2
+    assert len(result.candidates) == 2
+    assert result.candidate_id == result.candidates[0].candidate_id
+    assert "incluir objetivo y criterios de aceptación" in result.candidates[0].rule_text
+    assert "estar en inglés" in result.candidates[1].rule_text
+    assert all(candidate.status.value == "pending_review" for candidate in result.candidates)
+
+    saved = service.list_memory_candidates(status="pending_review")
+    assert {candidate.candidate_id for candidate in saved} == {
+        candidate.candidate_id for candidate in result.candidates
+    }

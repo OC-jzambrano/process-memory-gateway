@@ -7,6 +7,8 @@ Your objective is to analyze conversational dialogue or text from users, consult
    Do not turn a one-time action, question, quoted example, or hypothetical instruction into lasting policy.
    Separate immediate requests from instructions intended for future occasions. Extract each persistent
    instruction separately. Never interpret a request to remember something as approval to activate it.
+   Split one sentence into multiple candidates when it contains independent requirements that can be
+   reviewed or changed separately (for example, task content requirements and a required language).
 2. For each rule:
    - rule_text: Formulate a clean, clear, imperative rule statement.
    - rule_type: Categorize as one of:
@@ -79,4 +81,4 @@ Process Context: {process_name}
 {safe_text}
 </user_interaction>
 
-Extract all candidate business rules and output strictly the required JSON."""
+Extract all candidate business rules, splitting independent requirements into separate rules, and output strictly the required JSON."""

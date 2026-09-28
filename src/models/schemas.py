@@ -235,6 +235,10 @@ class CandidateResult(BaseModel):
     constraint: DeterministicConstraint | None = None
     confidence: float
     message: str
+    # `candidate_id` and the other scalar fields keep older clients compatible.
+    # New clients can render and review every rule extracted from one instruction.
+    candidates: list[CandidateRule] = Field(default_factory=list)
+    candidate_count: int = 1
 
 
 class ReviewResult(BaseModel):

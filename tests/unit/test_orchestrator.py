@@ -464,6 +464,50 @@ def test_odoo_xmlrpc_dispatch_uses_generic_values_payload(tmp_path):
     assert calls == {"model": "res.partner", "values": {"name": "Acme"}}
 
 
+def test_odoo_xmlrpc_dispatch_blocks_arbitrary_execute_kw_even_if_registered(tmp_path):
+    repo = MemoryRepository(db_path=tmp_path / "dispatcher_odoo_execute_kw_blocked.db")
+    repo.upsert_company(Company(company_id="co_odoo", company_slug="co-odoo", name="Odoo Co"))
+    repo.upsert_downstream_mcp(
+        DownstreamMCPServer(
+            company_id="co_odoo",
+            server_id="odoo",
+            endpoint="https://odoo.example",
+            transport=MCPTransport.ODOO_XMLRPC,
+            available_tools=[
+                DownstreamToolDefinition(
+                    name="execute_kw",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "model": {"type": "string"},
+                            "method": {"type": "string"},
+                        },
+                        "required": ["model", "method"],
+                    },
+                )
+            ],
+        )
+    )
+    connector_calls = []
+    dispatcher = DownstreamDispatcher(
+        repo=repo,
+        odoo_connector_factory=lambda server: connector_calls.append(server),
+    )
+
+    result = dispatcher.dispatch(
+        "co_odoo",
+        OrchestrationToolCall(
+            server_id="odoo",
+            tool_name="execute_kw",
+            arguments={"model": "res.users", "method": "unlink", "args": [[1]]},
+        ),
+    )
+
+    assert result.success is False
+    assert "only supports the registered create_record operation" in result.error
+    assert connector_calls == []
+
+
 def test_bedrock_orchestrator_mock_handler():
     """BedrockOrchestrator invokes mock handler offline when provided."""
     expected_call = OrchestrationToolCall(

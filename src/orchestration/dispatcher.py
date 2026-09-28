@@ -222,6 +222,22 @@ class DownstreamDispatcher:
                 error=f"Tool '{tool_name}' is not registered in the allowlist for server '{server_id}'.",
             )
 
+        # Keep the built-in XML-RPC bridge deliberately narrow. Generic MCP
+        # downstreams can expose their own complete tool surface over HTTP;
+        # OPM must not offer arbitrary Odoo model-method execution via execute_kw.
+        if server.transport == MCPTransport.ODOO_XMLRPC and tool_name != "create_record":
+            return OrchestrationResult(
+                success=False,
+                correlation_id=cid,
+                server_id=server_id,
+                tool_name=tool_name,
+                error=(
+                    "The built-in Odoo XML-RPC bridge only supports the registered "
+                    "create_record operation. Use a registered downstream MCP for "
+                    "other Odoo tools."
+                ),
+            )
+
         # 3. Protocol & Schema Check
         try:
             validate_protocol_and_schema(tool_def, arguments)
@@ -240,15 +256,9 @@ class DownstreamDispatcher:
             if server.transport == MCPTransport.ODOO_XMLRPC:
                 connector = self._resolve_odoo_connector(server)
                 model = arguments.get("model", "")
-                if tool_name == "create_record":
-                    result = connector.create_record(model=model, values=arguments.get("values", {}))
-                else:
-                    result = connector.execute_kw(
-                        model=model,
-                        method=arguments.get("method", tool_name),
-                        args=arguments.get("args", []),
-                        kwargs=arguments.get("kwargs", {}),
-                    )
+                result = connector.create_record(
+                    model=model, values=arguments.get("values", {})
+                )
             elif server.transport == MCPTransport.STREAMABLE_HTTP:
                 result = self._dispatch_streamable_http(server, tool_name, arguments)
             elif server.transport == MCPTransport.INTERNAL_MOCK:

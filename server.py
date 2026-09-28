@@ -72,7 +72,8 @@ def register_tools(mcp_app: FastMCP, service: Any) -> None:
             context_hint: Optional structured dictionary indicating target system, application, resource, or field.
 
         Returns:
-            JSON string containing CandidateResult with candidate ID, previewed scope, constraint, and status.
+            JSON string containing all extracted candidates, each pending human review.
+            The legacy top-level candidate_id and preview fields refer to the first candidate.
         """
         scope = ActionContext(**context_hint) if context_hint else None
         result = service.remember_company_instruction(
