@@ -110,5 +110,51 @@ if [ "$READY" -ne 1 ]; then
   exit 1
 fi
 
+# Back up through the host's instance role. The app container cannot reliably
+# reach EC2 instance metadata through Docker's bridge network.
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+BACKUP_BUCKET="odoo-process-memory-backups-${ACCOUNT_ID}-pilot"
+printf 'BACKUP_BUCKET=%q\n' "$BACKUP_BUCKET" > /etc/default/process-memory-backup
+chmod 600 /etc/default/process-memory-backup
+cat << 'BACKUP_EOF' > /etc/cron.hourly/process-memory-backup
+#!/usr/bin/env bash
+set -euo pipefail
+exec > >(logger -t process-memory-backup) 2>&1
+source /etc/default/process-memory-backup
+
+START_TS=$(date -u +%s)
+BACKUP_DIR=/mnt/process-memory-data/backups
+docker exec mcp-server mkdir -p /mnt/data/backups
+docker exec mcp-server python scripts/backup_sqlite.py \
+  --db-path /mnt/data/process_memory.db \
+  --local-dir /mnt/data/backups
+
+BACKUP_FILE=$(find "$BACKUP_DIR" -maxdepth 1 -type f \
+  -name 'process_memory_*.db.gz' -newermt "@$START_TS" \
+  -printf '%T@ %p\n' | sort -nr | head -n 1 | cut -d' ' -f2-)
+if [ -z "$BACKUP_FILE" ]; then
+  echo "No new SQLite backup was created."
+  exit 1
+fi
+
+BASENAME=$(basename "$BACKUP_FILE")
+STAMP=${BASENAME#process_memory_}
+YEAR=${STAMP:0:4}
+MONTH=${STAMP:4:2}
+DAY=${STAMP:6:2}
+OBJECT_KEY="backups/$YEAR/$MONTH/$DAY/$BASENAME"
+aws s3 cp --only-show-errors "$BACKUP_FILE" \
+  "s3://$BACKUP_BUCKET/$OBJECT_KEY" --sse AES256
+CONTENT_LENGTH=$(aws s3api head-object --bucket "$BACKUP_BUCKET" \
+  --key "$OBJECT_KEY" --query ContentLength --output text)
+if ! [[ "$CONTENT_LENGTH" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Uploaded backup failed the S3 object verification."
+  exit 1
+fi
+rm -- "$BACKUP_FILE"
+echo "Verified SQLite backup in s3://$BACKUP_BUCKET/$OBJECT_KEY ($CONTENT_LENGTH bytes)."
+BACKUP_EOF
+chmod 700 /etc/cron.hourly/process-memory-backup
+
 rm -f .env.bak
 echo "Deployment of $IMAGE_DIGEST completed successfully."
