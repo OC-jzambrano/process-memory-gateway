@@ -17,7 +17,7 @@ resource "aws_ebs_volume" "memory_data" {
 
 # Single t3.small EC2 Host
 resource "aws_instance" "mcp_host" {
-  ami                    = data.aws_ami.ubuntu.id
+  ami                    = var.ec2_ami_id
   instance_type          = var.ec2_instance_type
   subnet_id              = aws_subnet.public.id
   vpc_security_group_ids = [aws_security_group.mcp_host.id]

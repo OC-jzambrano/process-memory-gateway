@@ -52,6 +52,12 @@ variable "ec2_instance_type" {
   default     = "t3.small"
 }
 
+variable "ec2_ami_id" {
+  type        = string
+  description = "Pinned Ubuntu 24.04 AMI for the pilot host; update deliberately during a planned host refresh"
+  default     = "ami-035c8a091035e710a"
+}
+
 variable "ebs_volume_size_gb" {
   type        = number
   description = "Size of the persistent SQLite EBS data volume in GiB"
