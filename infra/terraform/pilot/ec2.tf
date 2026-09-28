@@ -79,26 +79,36 @@ resource "aws_instance" "mcp_host" {
                 if ! grep -q "$UUID" /etc/fstab; then
                   echo "UUID=$UUID $DATA_MOUNT ext4 defaults,nofail 0 2" >> /etc/fstab
                 fi
-                mount -a || true
+                mount "$DEVICE" "$DATA_MOUNT"
               fi
 
-              chmod 777 "$DATA_MOUNT"
+              mountpoint -q "$DATA_MOUNT"
+              chown 10001:10001 "$DATA_MOUNT"
+              chmod 750 "$DATA_MOUNT"
 
               # Setup application directory
               mkdir -p /opt/process-memory
 
               # Setup hourly backup cron
               cat << 'CRON_EOF' > /etc/cron.hourly/process-memory-backup
-              #!/bin/bash
-              set -e
+              #!/usr/bin/env bash
+              set -euo pipefail
+              exec > >(logger -t process-memory-backup) 2>&1
               if [ -f /opt/process-memory/docker-compose.yml ]; then
-                docker exec mcp-server python scripts/backup_sqlite.py --s3-bucket "${aws_s3_bucket.backups.id}" || true
+                docker exec mcp-server python scripts/backup_sqlite.py --s3-bucket "${aws_s3_bucket.backups.id}"
               fi
               CRON_EOF
               chmod +x /etc/cron.hourly/process-memory-backup
 
               echo "Bootstrap completed successfully."
               EOF
+
+  lifecycle {
+    prevent_destroy = true
+    # Host bootstrap runs only at first boot. App releases and backup jobs are updated through SSM.
+    # Applying user_data changes to a live host would require a stop/start without rerunning cloud-init.
+    ignore_changes = [user_data]
+  }
 
   tags = {
     Name = "odoo-process-memory-${var.environment}-host"
