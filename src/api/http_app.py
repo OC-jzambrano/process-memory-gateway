@@ -484,6 +484,7 @@ textarea{min-height:68px;resize:vertical}
   <p style='font-size:13px;color:var(--muted);margin-bottom:12px'>
     This key never expires and replaces short-lived Cognito tokens in your AI client config.</p>
   <div class='flex-row'>
+    <label for='key_label'>AI client</label>
     <select id='key_label' style='max-width:220px; padding: 10px 12px; background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text);'>
       <option value='Antigravity Desktop'>Antigravity Desktop</option>
       <option value='Antigravity CLI'>Antigravity CLI</option>
@@ -506,7 +507,7 @@ textarea{min-height:68px;resize:vertical}
 <div class='step' id='step_install'>
   <h2><span class='step-num'>3</span> Add to your AI client</h2>
   <p style='font-size:13px;color:var(--muted);margin-bottom:16px'>
-    Pick a client, copy or download the config, then open that client's MCP settings.</p>
+    The client selected above is shown here. Copy or download its config, then open that client's MCP settings.</p>
   <div id='client_cards'></div>
 </div>
 
@@ -581,6 +582,7 @@ SL=document.getElementById('services_list'),
 IU=document.getElementById('invite_email'),IR=document.getElementById('invite_role'),
 IB=document.getElementById('btn_invite_user'),IM=document.getElementById('invite_message');
 let curKey=null;
+KL.addEventListener('change',()=>{if(CC.childElementCount)renderClients()});
 function safeGet(t,k){try{return window[t].getItem(k)||''}catch(e){return ''}}
 function safeSet(t,k,v){try{window[t].setItem(k,v)}catch(e){console.warn('Storage blocked:',e)}}
 function safeRem(t,k){try{window[t].removeItem(k)}catch(e){}}
@@ -626,12 +628,13 @@ BL.onclick=()=>login().catch(()=>{AS.className='status-badge err';AS.textContent
 BO.onclick=()=>{safeRem('sessionStorage','opmAccessToken');AS.className='status-badge err';AS.textContent='Signed out';EK.innerHTML='';CC.innerHTML='';NKD.classList.add('hidden');curKey=null};
 BG.onclick=async()=>{
   const b=gb(),c=gc();if(!b){AS.className='status-badge err';AS.textContent='Sign in again in this tab before generating a key.';return}
-  BG.disabled=true;BG.textContent='Generating...';
-  try{const r=await fetch('/install/api-key?company='+encodeURIComponent(c),{method:'POST',headers:{'Content-Type':'application/json',Authorization:b},body:JSON.stringify({label:KL.value.trim()||'default'})});
+  const selectedClient=KL.value;
+  BG.disabled=true;KL.disabled=true;BG.textContent='Generating...';
+  try{const r=await fetch('/install/api-key?company='+encodeURIComponent(c),{method:'POST',headers:{'Content-Type':'application/json',Authorization:b},body:JSON.stringify({label:selectedClient.trim()||'default'})});
     const d=await r.json();if(!r.ok){alert(d.error||d.message||'Failed');return}
     curKey=d.api_key;NKV.textContent=d.api_key;NKD.classList.remove('hidden');renderClients();loadKeys()
   }catch(e){alert('Error: '+e.message)}
-  finally{BG.disabled=false;BG.textContent='Generate API Key'}
+  finally{BG.disabled=false;KL.disabled=false;BG.textContent='Generate API Key'}
 };
 async function loadKeys(){
   const b=gb(),c=gc();if(!b)return;
@@ -670,34 +673,39 @@ function mcpUrl(){const h=location.host;const p=location.protocol;return p+'//'+
 function renderClients(){
   const url=mcpUrl(),kp=curKey||'opm_YOUR_API_KEY_HERE',bv='Bearer '+kp;
   const clients=[
-    {name:'Antigravity Desktop',badge:'Recommended',
+    {label:'Antigravity Desktop',name:'Antigravity Desktop',badge:'Recommended',
      path:'Settings > Customizations > Open MCP Config',
      open:'antigravity://settings/mcp',
      config:JSON.stringify({mcpServers:{"process-memory":{serverUrl:url,headers:{Authorization:bv}}}},null,2),
      file:'antigravity-mcp.json',
      steps:['Open Antigravity Desktop','Go to <b>Settings &rarr; Customizations</b>','Click <b>Open MCP Config</b>','Replace contents with the config below','Click <b>Refresh</b> in Installed MCP Servers']},
-    {name:'Antigravity CLI (agy)',badge:'Developers',
+    {label:'Antigravity CLI',name:'Antigravity CLI (agy)',badge:'Developers',
      path:'.mcp.json (project root) or global mcp_config.json',
      open:null,
      config:JSON.stringify({mcpServers:{"process-memory":{serverUrl:url,headers:{Authorization:bv}}}},null,2),
      file:'.mcp.json',
      steps:['Create or edit <b>.mcp.json</b> in your project root','Paste the config below','Run <b>agy</b> &mdash; the server appears automatically']},
-    {name:'Claude Desktop',badge:'Anthropic',
+    {label:'Claude Desktop',name:'Claude Desktop',badge:'Anthropic',
      path:navigator.platform.includes('Win')?'%APPDATA%\\Claude\\claude_desktop_config.json':navigator.platform.includes('Mac')?'~/Library/Application Support/Claude/claude_desktop_config.json':'~/.config/claude/claude_desktop_config.json',
      open:'claude://settings/developer',
      config:JSON.stringify({mcpServers:{"process-memory":{command:"npx",args:["-y","@anthropic/mcp-remote",url,"--header","Authorization: "+bv]}}},null,2),
      file:'claude_desktop_config.json',
      steps:['Open Claude Desktop &rarr; <b>Settings &rarr; Developer &rarr; Edit Config</b>','Paste the config below','Restart Claude Desktop','The process-memory tools will appear in chat']},
-    {name:'Codex (OpenAI)',badge:'OpenAI',
+    {label:'Codex',name:'Codex (OpenAI)',badge:'OpenAI',
      path:'.codex/mcp.json',
      open:null,
      config:JSON.stringify({mcpServers:{"process-memory":{type:"url",url:url,headers:{Authorization:bv}}}},null,2),
      file:'codex-mcp.json',
-     steps:['Create <b>.codex/mcp.json</b> in your project root','Paste the config below','Run <b>codex</b> &mdash; it discovers the MCP server']}
+      steps:['Create <b>.codex/mcp.json</b> in your project root','Paste the config below','Run <b>codex</b> &mdash; it discovers the MCP server']},
+    {label:'Other',name:'Other MCP client',badge:'Custom client',
+     path:'Remote MCP / Streamable HTTP settings',
+     open:null,
+     config:JSON.stringify({mcpServers:{'process-memory':{serverUrl:url,headers:{Authorization:bv}}}},null,2),
+     file:'process-memory-mcp.json',
+     steps:['Open your AI client’s MCP settings','Add a remote or Streamable HTTP MCP server using the config below','Save the settings, then refresh or restart your client']}
   ];
-  let h='';
-  clients.forEach((c,i)=>{
-    h+='<div class="client-card'+(i===0?' open':'')+'">'
+  const c=clients.find(client=>client.label===KL.value)||clients[0];
+  let h='<div class="client-card open">'
       +'<div class="client-header" onclick="this.parentElement.classList.toggle(&quot;open&quot;)"><span class="chevron">&#9654;</span><h3>'+esc(c.name)+'</h3><span class="client-badge">'+esc(c.badge)+'</span></div>'
       +'<div class="client-body"><div class="file-path">'+esc(c.path)+'</div>'
       +'<div class="flex-row" style="margin-bottom:10px">'
@@ -707,9 +715,8 @@ function renderClients(){
       +'<div class="config-block"><button class="copy-btn" onclick="event.stopPropagation();const p=this.parentElement.querySelector(&quot;pre&quot;);copyText(p.textContent).then(()=>{this.textContent=&quot;Copied!&quot;;setTimeout(()=>this.textContent=&quot;Copy&quot;,1500)}).catch(()=>alert(&quot;Please copy manually.&quot;))">Copy</button>'
       +'<pre>'+esc(c.config)+'</pre></div>'
       +'<div class="instructions"><ol>';
-    c.steps.forEach(s=>{h+='<li>'+s+'</li>'});
-    h+='</ol></div></div></div>'
-  });
+  c.steps.forEach(s=>{h+='<li>'+s+'</li>'});
+  h+='</ol></div></div></div>';
   CC.innerHTML=h
 }
 async function loadServices(){
