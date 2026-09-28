@@ -1,6 +1,10 @@
 resource "aws_cognito_user_pool" "pool" {
   name = "odoo-process-memory-${var.environment}-users"
 
+  admin_create_user_config {
+    allow_admin_create_user_only = true
+  }
+
   password_policy {
     minimum_length                   = 12
     require_lowercase                = true

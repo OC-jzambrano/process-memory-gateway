@@ -4,9 +4,11 @@ import hashlib
 import html
 import json
 import logging
+import re
 import secrets as stdlib_secrets
 import uuid
 
+import boto3
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
@@ -20,6 +22,7 @@ from src.api.auth import (
     resolve_authenticated_context,
 )
 from src.api.auth_context import set_current_context
+from src.api.onboarding import InviteError, invite_company_user
 from src.config import (
     AWS_REGION,
     COGNITO_APP_CLIENT_ID,
@@ -507,8 +510,24 @@ textarea{min-height:68px;resize:vertical}
   <div id='client_cards'></div>
 </div>
 
+<div class='step' id='step_users'>
+  <h2><span class='step-num'>4</span> Invite a company user</h2>
+  <p class='help-line'>Company Owners can invite users by email. New accounts start with the selected role; Owner access is granted only through the secure bootstrap process.</p>
+  <div class='flex-row'>
+    <input id='invite_email' type='email' autocomplete='email' placeholder='name@example.com' style='max-width:340px'>
+    <select id='invite_role' style='max-width:180px'>
+      <option value='member'>Member</option>
+      <option value='operator'>Operator</option>
+      <option value='reviewer'>Reviewer</option>
+      <option value='auditor'>Auditor</option>
+    </select>
+    <button id='btn_invite_user' class='btn-primary'>Send invitation</button>
+  </div>
+  <p id='invite_message' class='help-line' aria-live='polite'></p>
+</div>
+
 <div class='step' id='step_services'>
-  <h2><span class='step-num'>4</span> Connected services</h2>
+  <h2><span class='step-num'>5</span> Connected services</h2>
   <div class='panel-grid'>
     <div>
       <label>Service ID</label>
@@ -558,7 +577,9 @@ SI=document.getElementById('svc_id'),ST=document.getElementById('svc_transport')
 SE=document.getElementById('svc_endpoint'),SS=document.getElementById('svc_secret'),
 SU=document.getElementById('svc_user'),SP=document.getElementById('svc_pass'),
 BS=document.getElementById('btn_save_service'),BR=document.getElementById('btn_refresh_services'),
-SL=document.getElementById('services_list');
+SL=document.getElementById('services_list'),
+IU=document.getElementById('invite_email'),IR=document.getElementById('invite_role'),
+IB=document.getElementById('btn_invite_user'),IM=document.getElementById('invite_message');
 let curKey=null;
 function safeGet(t,k){try{return window[t].getItem(k)||''}catch(e){return ''}}
 function safeSet(t,k,v){try{window[t].setItem(k,v)}catch(e){console.warn('Storage blocked:',e)}}
@@ -604,7 +625,7 @@ async function completeLogin(){
 BL.onclick=()=>login().catch(()=>{AS.className='status-badge err';AS.textContent='Login error'});
 BO.onclick=()=>{safeRem('sessionStorage','opmAccessToken');AS.className='status-badge err';AS.textContent='Signed out';EK.innerHTML='';CC.innerHTML='';NKD.classList.add('hidden');curKey=null};
 BG.onclick=async()=>{
-  const b=gb(),c=gc();if(!b){alert('Sign in first.');return}
+  const b=gb(),c=gc();if(!b){AS.className='status-badge err';AS.textContent='Sign in again in this tab before generating a key.';return}
   BG.disabled=true;BG.textContent='Generating...';
   try{const r=await fetch('/install/api-key?company='+encodeURIComponent(c),{method:'POST',headers:{'Content-Type':'application/json',Authorization:b},body:JSON.stringify({label:KL.value.trim()||'default'})});
     const d=await r.json();if(!r.ok){alert(d.error||d.message||'Failed');return}
@@ -625,6 +646,26 @@ async function loadKeys(){
 async function revokeKey(id){if(!confirm('Revoke this key?'))return;const b=gb(),c=gc();
   await fetch('/install/api-key/revoke?company='+encodeURIComponent(c),{method:'POST',headers:{'Content-Type':'application/json',Authorization:b},body:JSON.stringify({key_id:id})});loadKeys()
 }
+IB.onclick=async()=>{
+  const b=gb(),c=gc();
+  if(!b){IM.textContent='Sign in with Cognito in this tab before inviting users.';return}
+  const email=IU.value.trim();
+  if(!email){IM.textContent='Enter the invitee email address.';IU.focus();return}
+  IB.disabled=true;IB.textContent='Sending...';IM.textContent='';
+  try{
+    const r=await fetch('/install/invite?company='+encodeURIComponent(c),{
+      method:'POST',headers:{'Content-Type':'application/json',Authorization:b},
+      body:JSON.stringify({email,role:IR.value})
+    });
+    const d=await r.json();
+    if(!r.ok){IM.textContent=d.message||d.error||'Invitation failed.';return}
+    IU.value='';
+    IM.textContent=d.invitation_sent
+      ?'Invitation sent. The user must finish Cognito sign-in before connecting an MCP client.'
+      :'Access added for this existing Cognito user. They can sign in with their existing account.';
+  }catch(e){IM.textContent='Could not contact the invitation service.'}
+  finally{IB.disabled=false;IB.textContent='Send invitation'}
+};
 function mcpUrl(){const h=location.host;const p=location.protocol;return p+'//'+h+'/companies/'+encodeURIComponent(gc())+'/mcp'}
 function renderClients(){
   const url=mcpUrl(),kp=curKey||'opm_YOUR_API_KEY_HERE',bv='Bearer '+kp;
@@ -795,6 +836,69 @@ async def install_generate_key(request: Request) -> JSONResponse:
         return JSONResponse({"error": sanitize_evidence(str(exc))}, status_code=400)
 
 
+async def install_invite_user(request: Request) -> JSONResponse:
+    """Invite a user to the authenticated company with an explicit least role."""
+    try:
+        ctx = await _resolve_ui_context(request)
+    except AuthenticationError as exc:
+        return JSONResponse({"error": "unauthorized", "message": sanitize_evidence(str(exc))}, status_code=401)
+    except AuthorizationError as exc:
+        return JSONResponse({"error": "forbidden", "message": sanitize_evidence(str(exc))}, status_code=403)
+
+    if ctx.role is not RoleType.OWNER:
+        return JSONResponse(
+            {"error": "forbidden", "message": "Only a company Owner can invite users."},
+            status_code=403,
+        )
+    if not COGNITO_USER_POOL_ID:
+        return JSONResponse(
+            {"error": "unavailable", "message": "Cognito user invitations are not configured."},
+            status_code=503,
+        )
+
+    try:
+        payload = await request.json()
+    except ValueError:
+        return JSONResponse({"error": "invalid_json"}, status_code=400)
+    if not isinstance(payload, dict):
+        return JSONResponse({"error": "invalid_request"}, status_code=400)
+
+    email = str(payload.get("email", "")).strip().lower()
+    if len(email) > 254 or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
+        return JSONResponse({"error": "Enter a valid email address."}, status_code=400)
+    try:
+        role = RoleType(str(payload.get("role", RoleType.MEMBER.value)))
+    except ValueError:
+        return JSONResponse({"error": "Unsupported membership role."}, status_code=400)
+    if role is RoleType.OWNER:
+        return JSONResponse(
+            {"error": "Owner access must be granted through the owner bootstrap process."},
+            status_code=403,
+        )
+
+    try:
+        result = invite_company_user(
+            cognito=boto3.client("cognito-idp", region_name=COGNITO_REGION),
+            user_pool_id=COGNITO_USER_POOL_ID,
+            company_id=ctx.company_id,
+            email=email,
+            role=role,
+            repo=repo,
+        )
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    except InviteError as exc:
+        logger.warning("Cognito company invitation failed (%s)", type(exc).__name__)
+        return JSONResponse({"error": "invitation_failed", "message": str(exc)}, status_code=502)
+    except Exception as exc:  # noqa: BLE001 - keep cloud and persistence details private
+        logger.error("Cognito company invitation failed (%s)", type(exc).__name__)
+        return JSONResponse(
+            {"error": "invitation_failed", "message": "Could not complete the invitation."},
+            status_code=502,
+        )
+    return JSONResponse(result, status_code=201 if result["created"] else 200)
+
+
 async def install_list_keys(request: Request) -> JSONResponse:
     """List API keys for the authenticated user (prefix only, never full key)."""
     try:
@@ -822,7 +926,9 @@ async def install_revoke_key(request: Request) -> JSONResponse:
         key_id = data.get("key_id", "").strip()
         if not key_id:
             return JSONResponse({"error": "key_id is required"}, status_code=400)
-        revoked = repo.revoke_api_key(key_id=key_id, company_id=ctx.company_id)
+        revoked = repo.revoke_api_key(
+            key_id=key_id, company_id=ctx.company_id, user_id=ctx.user_id
+        )
         if not revoked:
             return JSONResponse({"error": "Key not found or already revoked"}, status_code=404)
         return JSONResponse({"status": "revoked", "key_id": key_id})
@@ -1251,6 +1357,7 @@ def create_app() -> Starlette:
             Route("/install", install_page, methods=["GET"]),
             Route("/install/auth-config", install_auth_config, methods=["GET"]),
             Route("/install/api-key", install_generate_key, methods=["POST"]),
+            Route("/install/invite", install_invite_user, methods=["POST"]),
             Route("/install/api-keys", install_list_keys, methods=["GET"]),
             Route("/install/api-key/revoke", install_revoke_key, methods=["POST"]),
             Route("/install/downstreams", install_list_downstreams, methods=["GET"]),

@@ -144,7 +144,6 @@ jobs:
           COMPOSE_B64=$(base64 -w 0 docker-compose.yml)
           CADDY_B64=$(base64 -w 0 Caddyfile)
           DEPLOY_SCRIPT_B64=$(base64 -w 0 scripts/deploy_on_host.sh)
-          ECR_TOKEN=$(aws ecr get-login-password --region "$AWS_REGION")
 
           CMD_ID=$(aws ssm send-command \
             --region "$AWS_REGION" \
@@ -157,7 +156,7 @@ jobs:
               \"echo '$CADDY_B64' | base64 -d > /opt/process-memory/Caddyfile\",
               \"echo '$DEPLOY_SCRIPT_B64' | base64 -d > /opt/process-memory/deploy_on_host.sh\",
               \"chmod +x /opt/process-memory/deploy_on_host.sh\",
-              \"/opt/process-memory/deploy_on_host.sh '$IMAGE_DIGEST' '$ECR_TOKEN'\"
+              \"/opt/process-memory/deploy_on_host.sh '$IMAGE_DIGEST'\"
             ]" \
             --query "Command.CommandId" --output text)
 

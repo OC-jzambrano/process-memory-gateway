@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
-set -euxo pipefail
+set -euo pipefail
 
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:$PATH"
 
 IMAGE_DIGEST="${1:-}"
-ECR_TOKEN="${2:-}"
 
 if [ -z "$IMAGE_DIGEST" ]; then
   echo "Error: IMAGE_DIGEST parameter is required."
@@ -52,7 +51,8 @@ if ! mountpoint -q "$DATA_MOUNT"; then
 fi
 
 mountpoint -q "$DATA_MOUNT" || (echo "FATAL: Persistent volume $DATA_MOUNT could not be mounted!" && exit 1)
-chmod 777 "$DATA_MOUNT"
+chown 10001:10001 "$DATA_MOUNT"
+chmod 750 "$DATA_MOUNT"
 
 APP_DIR="/opt/process-memory"
 mkdir -p "$APP_DIR"
@@ -60,23 +60,19 @@ cd "$APP_DIR"
 
 # 3. Authenticate Docker with Amazon ECR
 REGISTRY=$(echo "$IMAGE_DIGEST" | cut -d'/' -f1)
-if [ -n "$ECR_TOKEN" ]; then
-  echo "Logging into Amazon ECR via passed token..."
-  echo "$ECR_TOKEN" | docker login --username AWS --password-stdin "$REGISTRY"
-else
-  REGION="eu-north-1"
-  echo "Logging into Amazon ECR via AWS CLI..."
-  aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$REGISTRY"
-fi
+REGION="eu-north-1"
+echo "Logging into Amazon ECR via the EC2 instance role..."
+aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$REGISTRY"
 
 # 4. Pull image
 docker pull "$IMAGE_DIGEST"
 
 touch .env
 cp .env .env.bak
+chmod 600 .env .env.bak
 
 # 5. Write .env
-grep -v '^MCP_IMAGE=' .env.bak | grep -v '^COGNITO_' | grep -v '^PILOT_AUTO_ENROLL=' > .env || true
+grep -v '^MCP_IMAGE=' .env.bak | grep -v '^COGNITO_' > .env || true
 cat << EOF >> .env
 MCP_IMAGE=$IMAGE_DIGEST
 DOMAIN_NAME=51.20.246.78
@@ -85,7 +81,6 @@ COGNITO_DOMAIN=odoo-pm-pilot-354298.auth.eu-north-1.amazoncognito.com
 COGNITO_USER_POOL_ID=eu-north-1_0CeSG3jfV
 COGNITO_APP_CLIENT_ID=30bv65eumkbqei9l7p31q9ctvj
 COGNITO_RESOURCE_SERVER_IDENTIFIER=https://mcp.example.com
-PILOT_AUTO_ENROLL=true
 EOF
 
 # 6. Restart containers
@@ -114,10 +109,6 @@ if [ "$READY" -ne 1 ]; then
   docker compose up -d
   exit 1
 fi
-
-# 8. Seed default pilot tenants if needed
-docker exec mcp-server python -m src.cli.bootstrap --company odooconcept --name "Odoo Concept" --owner jzambrano --email jzambrano@odooconcept.com || true
-docker exec mcp-server python -m src.cli.bootstrap --company odooconcept_demo --name "Odoo Concept Demo" --owner jzambrano --email jzambrano@odooconcept.com || true
 
 rm -f .env.bak
 echo "Deployment of $IMAGE_DIGEST completed successfully."

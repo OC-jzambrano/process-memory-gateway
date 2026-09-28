@@ -265,6 +265,13 @@ class MemoryRepository(BaseRepository):
                 return User(**dict(row))
         return None
 
+    def get_user_by_email(self, email: str) -> User | None:
+        with db_session(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT * FROM users WHERE lower(email) = lower(?) LIMIT 1", (email,)
+            ).fetchone()
+            return User(**dict(row)) if row else None
+
     def upsert_membership(self, membership: Membership) -> Membership:
         now = self._now()
         with db_session(self.db_path) as conn, conn:
@@ -290,6 +297,62 @@ class MemoryRepository(BaseRepository):
                 ),
             )
         return membership
+
+    def provision_user_membership(
+        self, user: User, membership: Membership
+    ) -> Membership:
+        """Atomically provision an authenticated identity and its company access."""
+        if membership.user_id != user.user_id:
+            raise ValueError("User and membership IDs must match")
+
+        now = self._now()
+        with db_session(self.db_path) as conn, conn:
+            existing = conn.execute(
+                "SELECT user_id FROM users WHERE cognito_sub = ? OR user_id = ? LIMIT 1",
+                (user.cognito_sub, user.user_id),
+            ).fetchone()
+            user_id = existing["user_id"] if existing else user.user_id
+            existing_membership = conn.execute(
+                "SELECT 1 FROM memberships WHERE company_id = ? AND user_id = ?",
+                (membership.company_id, user_id),
+            ).fetchone()
+            if existing_membership:
+                raise ValueError("User already has a membership in this company")
+
+            conn.execute(
+                """
+                INSERT INTO users (user_id, email, name, cognito_sub, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    email=excluded.email,
+                    name=excluded.name,
+                    cognito_sub=excluded.cognito_sub,
+                    status=excluded.status
+                """,
+                (
+                    user_id,
+                    user.email,
+                    user.name,
+                    user.cognito_sub,
+                    user.status,
+                    user.created_at or now,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO memberships (membership_id, company_id, user_id, role, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    membership.membership_id,
+                    membership.company_id,
+                    user_id,
+                    membership.role.value,
+                    membership.status.value,
+                    membership.created_at or now,
+                ),
+            )
+        return membership.model_copy(update={"user_id": user_id})
 
     def get_membership(self, company_id: str, user_id: str) -> Membership | None:
         with db_session(self.db_path) as conn:
@@ -1310,12 +1373,13 @@ class MemoryRepository(BaseRepository):
             ).fetchall()
             return [dict(r) for r in rows]
 
-    def revoke_api_key(self, key_id: str, company_id: str) -> bool:
+    def revoke_api_key(self, key_id: str, company_id: str, user_id: str) -> bool:
         """Revokes an API key so it can no longer be used for authentication."""
         with db_session(self.db_path) as conn, conn:
             cur = conn.execute(
-                "UPDATE api_keys SET status = 'revoked' WHERE key_id = ? AND company_id = ?",
-                (key_id, company_id),
+                "UPDATE api_keys SET status = 'revoked' "
+                "WHERE key_id = ? AND company_id = ? AND user_id = ?",
+                (key_id, company_id, user_id),
             )
             return cur.rowcount > 0
 

@@ -40,6 +40,9 @@ class BaseRepository(ABC):
     def get_user_by_cognito_sub(self, cognito_sub: str) -> User | None: ...
 
     @abstractmethod
+    def get_user_by_email(self, email: str) -> User | None: ...
+
+    @abstractmethod
     def upsert_user(self, user: User) -> User: ...
 
     @abstractmethod
@@ -47,6 +50,11 @@ class BaseRepository(ABC):
 
     @abstractmethod
     def upsert_membership(self, membership: Membership) -> Membership: ...
+
+    @abstractmethod
+    def provision_user_membership(
+        self, user: User, membership: Membership
+    ) -> Membership: ...
 
     # 3. Odoo Connection Configuration
     @abstractmethod

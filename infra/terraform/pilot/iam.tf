@@ -102,6 +102,16 @@ resource "aws_iam_policy" "app_policy" {
             "secretsmanager:DescribeSecret"
           ]
           Resource = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:opm/downstream/*"
+        },
+        {
+          Sid    = "InviteCognitoUsers"
+          Effect = "Allow"
+          Action = [
+            "cognito-idp:AdminCreateUser",
+            "cognito-idp:AdminGetUser",
+            "cognito-idp:AdminDeleteUser"
+          ]
+          Resource = aws_cognito_user_pool.pool.arn
         }
       ]
     )

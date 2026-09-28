@@ -13,6 +13,7 @@ def bootstrap_company(
     odoo_url: str,
     odoo_db: str,
     default_project_id: int = 142,
+    owner_cognito_sub: str | None = None,
 ) -> None:
     repo = MemoryRepository()
 
@@ -35,6 +36,7 @@ def bootstrap_company(
             user_id=owner_user_id,
             email=owner_email,
             name=owner_user_id,
+            cognito_sub=owner_cognito_sub,
             status="active",
         )
     )
@@ -83,6 +85,10 @@ def main():
     parser.add_argument("--owner", required=True, help="Owner User ID")
     parser.add_argument("--email", required=True, help="Owner Email")
     parser.add_argument(
+        "--cognito-sub",
+        help="Cognito sub for the initial Owner; recommended for hosted deployments",
+    )
+    parser.add_argument(
         "--odoo-url",
         default="https://community.odooconcept.com",
         help="Odoo Server URL",
@@ -101,6 +107,7 @@ def main():
         odoo_url=args.odoo_url,
         odoo_db=args.odoo_db,
         default_project_id=args.project,
+        owner_cognito_sub=args.cognito_sub,
     )
 
 
