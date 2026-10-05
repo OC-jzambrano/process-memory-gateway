@@ -86,3 +86,16 @@ variable "approved_logout_urls" {
     "http://localhost:3000/logout"
   ]
 }
+
+variable "enable_idle_auto_stop" {
+  type        = bool
+  description = "Enable automatic CloudWatch alarm to stop the EC2 instance when idle to prevent runaway compute costs"
+  default     = true
+}
+
+variable "idle_auto_stop_minutes" {
+  type        = number
+  description = "Number of minutes of idle CPU (<2%) before triggering EC2 stop"
+  default     = 45
+}
+
