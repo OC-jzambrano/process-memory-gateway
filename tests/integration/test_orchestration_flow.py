@@ -260,7 +260,7 @@ def test_odoo_actor_context_is_injected_without_forcing_assignee(tmp_path):
                 operation="create",
                 fields=["name", "user_ids"],
             ),
-            downstream_hint="odoo",
+            downstream_server_id="odoo",
         )
 
         assert result.success is True
@@ -363,7 +363,7 @@ def test_odoo_actor_context_uses_registered_downstream_actor(tmp_path):
                 operation="create",
                 fields=["name", "user_ids"],
             ),
-            downstream_hint="odoo",
+            downstream_server_id="odoo",
         )
 
         assert result.success is True
@@ -496,7 +496,7 @@ def test_registered_downstream_actor_is_not_default_for_different_opm_user(tmp_p
                 operation="create",
                 fields=["name", "user_ids"],
             ),
-            downstream_hint="odoo",
+            downstream_server_id="odoo",
         )
 
         assert result.success is True
@@ -633,7 +633,7 @@ def test_multi_tenant_downstream_isolation(multi_tenant_setup):
         # Company B attempting to run downstream request against Company A's server fails
         result = service.run_downstream_request(
             user_request="Invoke secret tool",
-            downstream_hint="odoo-alpha-secret",
+            downstream_server_id="odoo-alpha-secret",
         )
         assert result.success is False
         assert "not registered for company 'beta'" in (result.error or "")
@@ -642,7 +642,7 @@ def test_multi_tenant_downstream_isolation(multi_tenant_setup):
         set_current_context(None)
 
 
-def test_downstream_hint_never_falls_back_to_another_server(multi_tenant_setup):
+def test_tool_name_is_rejected_as_downstream_server_id(multi_tenant_setup):
     service, _repo, _observed_rule_ids = multi_tenant_setup
     set_current_context(
         RequestContext(
@@ -664,11 +664,13 @@ def test_downstream_hint_never_falls_back_to_another_server(multi_tenant_setup):
         )
         result = service.run_downstream_request(
             user_request="Create a baseline test record",
-            downstream_hint="odoo-test",
+            downstream_server_id="search_records",
         )
         assert result.success is False
-        assert result.server_id == "odoo-test"
+        assert result.server_id == "search_records"
         assert "not registered for company 'alpha'" in (result.error or "")
+        assert "Available server IDs: odoo-main" in (result.error or "")
+        assert "server_id" in (result.error or "")
     finally:
         set_current_context(None)
 
@@ -794,7 +796,7 @@ def test_structured_json_fallback_dispatches_when_orchestrator_unavailable(tmp_p
                 resource="project.task",
                 operation="create",
             ),
-            downstream_hint="odoo",
+            downstream_server_id="odoo",
         )
 
         assert result.success is True
@@ -808,7 +810,7 @@ def test_structured_json_fallback_dispatches_when_orchestrator_unavailable(tmp_p
         set_current_context(None)
 
 
-def test_structured_json_fallback_respects_downstream_hint_scope(tmp_path):
+def test_structured_json_fallback_respects_downstream_server_id_scope(tmp_path):
     repo = MemoryRepository(db_path=tmp_path / "fallback_hint_scope.db")
     repo.upsert_company(
         Company(
@@ -878,7 +880,7 @@ def test_structured_json_fallback_respects_downstream_hint_scope(tmp_path):
                 '{"server_id":"odoo-staging","tool_name":"create_record",'
                 '"arguments":{"model":"project.task","values":{"name":"Wrong target"}}}'
             ),
-            downstream_hint="odoo-prod",
+            downstream_server_id="odoo-prod",
         )
 
         assert result.success is False

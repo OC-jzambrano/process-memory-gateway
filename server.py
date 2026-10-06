@@ -254,7 +254,7 @@ def register_tools(mcp_app: FastMCP, service: Any) -> None:
     def process_execute_action(
         user_request: str,
         action_context: dict[str, Any] | None = None,
-        downstream_hint: str | None = None,
+        downstream_server_id: str | None = None,
         correlation_id: str | None = None,
     ) -> str:
         """
@@ -272,7 +272,8 @@ def register_tools(mcp_app: FastMCP, service: Any) -> None:
         Args:
             user_request: Natural language request from the user or client agent.
             action_context: Complete target action context dict (system, application, resource, operation, fields).
-            downstream_hint: Optional server or tool name hint.
+            downstream_server_id: Exact ID of the registered downstream server to use
+                (for example, 'odooconcept_demo'). This is a server ID, not a tool name.
             correlation_id: Optional unique idempotency tracking identifier.
 
         Returns:
@@ -282,7 +283,7 @@ def register_tools(mcp_app: FastMCP, service: Any) -> None:
         result = service.run_downstream_request(
             user_request=user_request,
             action_context=scope,
-            downstream_hint=downstream_hint,
+            downstream_server_id=downstream_server_id,
             correlation_id=correlation_id,
         )
         return result.model_dump_json(indent=2)
@@ -484,14 +485,14 @@ def process_register_downstream_mcp(
 def run_downstream_request(
     user_request: str,
     action_context: dict[str, Any] | None = None,
-    downstream_hint: str | None = None,
+    downstream_server_id: str | None = None,
     correlation_id: str | None = None,
 ) -> str:
     scope = ActionContext(**action_context) if action_context else None
     result = get_default_service().run_downstream_request(
         user_request=user_request,
         action_context=scope,
-        downstream_hint=downstream_hint,
+        downstream_server_id=downstream_server_id,
         correlation_id=correlation_id,
     )
     return result.model_dump_json(indent=2)
@@ -500,13 +501,13 @@ def run_downstream_request(
 def process_execute_action(
     user_request: str,
     action_context: dict[str, Any] | None = None,
-    downstream_hint: str | None = None,
+    downstream_server_id: str | None = None,
     correlation_id: str | None = None,
 ) -> str:
     return run_downstream_request(
         user_request=user_request,
         action_context=action_context,
-        downstream_hint=downstream_hint,
+        downstream_server_id=downstream_server_id,
         correlation_id=correlation_id,
     )
 

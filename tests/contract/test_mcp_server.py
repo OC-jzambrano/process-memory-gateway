@@ -253,7 +253,7 @@ class FakeProcessMemoryService:
         self,
         user_request: str,
         action_context: ActionContext | dict[str, Any] | None = None,
-        downstream_hint: str | None = None,
+        downstream_server_id: str | None = None,
         correlation_id: str | None = None,
     ) -> OrchestrationResult:
         self.invocations.append(
@@ -261,7 +261,7 @@ class FakeProcessMemoryService:
                 "method": "run_downstream_request",
                 "user_request": user_request,
                 "action_context": action_context,
-                "downstream_hint": downstream_hint,
+                "downstream_server_id": downstream_server_id,
                 "correlation_id": correlation_id,
             }
         )

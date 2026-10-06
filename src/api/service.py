@@ -531,7 +531,7 @@ class HostedProcessMemoryService:
         self,
         user_request: str,
         action_context: ActionContext | dict[str, Any] | None = None,
-        downstream_hint: str | None = None,
+        downstream_server_id: str | None = None,
         correlation_id: str | None = None,
     ) -> OrchestrationResult:
         ctx = get_current_context()
@@ -551,20 +551,24 @@ class HostedProcessMemoryService:
 
         # 1. Fetch registered downstream servers for company
         registered_servers = self.list_downstream_mcps()
-        if downstream_hint:
+        if downstream_server_id:
             filtered = [
                 s for s in registered_servers
-                if s.server_id == downstream_hint or any(t.name == downstream_hint for t in s.available_tools)
+                if s.server_id == downstream_server_id
             ]
             if not filtered:
+                available_ids = ", ".join(sorted(s.server_id for s in registered_servers))
+                available_text = available_ids or "(none)"
                 return OrchestrationResult(
                     success=False,
                     correlation_id=cid,
-                    server_id=downstream_hint,
+                    server_id=downstream_server_id,
                     tool_name="none",
                     error=(
-                        f"Downstream '{downstream_hint}' is not registered for "
-                        f"company '{ctx.company_slug}'."
+                        f"Downstream server ID '{downstream_server_id}' is not registered "
+                        f"for company '{ctx.company_slug}'. Available server IDs: {available_text}. "
+                        "Pass the exact server_id from the connected services list; tool names "
+                        "such as 'search_records' are not server IDs."
                     ),
                 )
             registered_servers = filtered
@@ -582,7 +586,7 @@ class HostedProcessMemoryService:
             return OrchestrationResult(
                 success=False,
                 correlation_id=cid,
-                server_id=downstream_hint or "unknown",
+                server_id=downstream_server_id or "unknown",
                 tool_name="none",
                 error=f"No downstream MCP servers registered for company '{ctx.company_id}'.",
             )
@@ -600,7 +604,7 @@ class HostedProcessMemoryService:
         if pack.omitted_count:
             return OrchestrationResult(
                 success=False, correlation_id=cid,
-                server_id=downstream_hint or "unknown", tool_name="none",
+                server_id=downstream_server_id or "unknown", tool_name="none",
                 error="Relevant company memory exceeds the context budget; narrow the action context before executing.",
                 metadata={"memory_omitted_count": pack.omitted_count},
             )
@@ -633,7 +637,7 @@ class HostedProcessMemoryService:
             fallback_call = self._try_structured_fallback_tool_call(
                 user_request=user_request,
                 registered_servers=registered_servers,
-                downstream_hint=downstream_hint,
+                downstream_server_id=downstream_server_id,
             )
             if fallback_call:
                 mismatch = self._tool_operation_mismatch(
@@ -976,7 +980,7 @@ class HostedProcessMemoryService:
         self,
         user_request: str,
         registered_servers: list[DownstreamMCPServer],
-        downstream_hint: str | None = None,
+        downstream_server_id: str | None = None,
     ) -> OrchestrationToolCall | None:
         """
         Deterministic escape hatch for agents that already know the exact downstream call.
@@ -1002,7 +1006,7 @@ class HostedProcessMemoryService:
                 )
             return None
 
-        server = self._select_fallback_server(registered_servers, downstream_hint)
+        server = self._select_fallback_server(registered_servers, downstream_server_id)
         if not server:
             return None
 
@@ -1017,10 +1021,10 @@ class HostedProcessMemoryService:
     @staticmethod
     def _select_fallback_server(
         registered_servers: list[DownstreamMCPServer],
-        downstream_hint: str | None,
+        downstream_server_id: str | None,
     ) -> DownstreamMCPServer | None:
-        if downstream_hint:
-            return next((s for s in registered_servers if s.server_id == downstream_hint), None)
+        if downstream_server_id:
+            return next((s for s in registered_servers if s.server_id == downstream_server_id), None)
         if len(registered_servers) == 1:
             return registered_servers[0]
         odoo_servers = [s for s in registered_servers if s.transport == MCPTransport.ODOO_XMLRPC]
