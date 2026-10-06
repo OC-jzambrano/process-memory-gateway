@@ -903,6 +903,67 @@ class MemoryRepository(BaseRepository):
 
         return new_rule
 
+    def delete_canonical_rule(
+        self,
+        rule_id: str,
+        client_id: str,
+        deleted_by: str,
+        notes: str | None = None,
+    ) -> bool:
+        if not rule_id or not rule_id.strip():
+            raise ValueError("rule_id is required to delete a canonical rule.")
+        if not client_id or not client_id.strip():
+            raise ValueError("client_id is required to delete a canonical rule.")
+
+        now = self._now()
+        event_id = f"evt_{uuid.uuid4().hex}"
+
+        with db_session(self.db_path) as conn:
+            cursor = conn.cursor()
+            row = cursor.execute(
+                "SELECT * FROM canonical_rules WHERE rule_id = ? AND client_id = ?",
+                (rule_id, client_id),
+            ).fetchone()
+
+            if not row:
+                raise ValueError(
+                    f"Canonical Rule with ID '{rule_id}' not found for tenant '{client_id}'."
+                )
+
+            data = dict(row)
+
+            with conn:
+                conn.execute(
+                    """
+                    INSERT INTO review_events (
+                        event_id, client_id, candidate_id, rule_id, event_type,
+                        reviewer, decision, notes, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        event_id,
+                        client_id,
+                        data.get("source_candidate_id"),
+                        rule_id,
+                        EventType.RULE_ARCHIVED.value,
+                        deleted_by,
+                        DecisionType.ARCHIVE.value,
+                        notes or f"Canonical rule {rule_id} permanently deleted via API",
+                        now,
+                    ),
+                )
+
+                conn.execute(
+                    "UPDATE canonical_rules SET replaced_by_rule_id = NULL WHERE replaced_by_rule_id = ? AND client_id = ?",
+                    (rule_id, client_id),
+                )
+
+                cur = conn.execute(
+                    "DELETE FROM canonical_rules WHERE rule_id = ? AND client_id = ?",
+                    (rule_id, client_id),
+                )
+                return cur.rowcount > 0
+
     def create_canonical_rule(self, rule: CanonicalRule) -> CanonicalRule:
         now = self._now()
         scope_json = self._serialize_json(rule.structured_scope)

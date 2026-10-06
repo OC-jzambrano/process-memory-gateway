@@ -1,0 +1,1341 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OPM — Odoo Process Memory</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #090d16;
+      --surface: #101726;
+      --surface-card: #131c2e;
+      --surface-elevated: #1a253c;
+      --surface-subtle: #0d1322;
+      --border: rgba(255, 255, 255, 0.08);
+      --border-strong: rgba(255, 255, 255, 0.16);
+      
+      --text-1: #f8fafc;
+      --text-2: #94a3b8;
+      --text-3: #64748b;
+
+      --blue: #3b82f6;
+      --blue-subtle: rgba(59, 130, 246, 0.12);
+      --green: #10b981;
+      --green-subtle: rgba(16, 185, 129, 0.12);
+      --amber: #f59e0b;
+      --amber-subtle: rgba(245, 158, 11, 0.12);
+      --red: #ef4444;
+      --red-subtle: rgba(239, 68, 68, 0.12);
+
+      --font-title: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      --font-body: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+    }
+
+    [data-theme="light"] {
+      --bg: #f8fafc;
+      --surface: #ffffff;
+      --surface-card: #ffffff;
+      --surface-elevated: #f1f5f9;
+      --surface-subtle: #f8fafc;
+      --border: rgba(0, 0, 0, 0.09);
+      --border-strong: rgba(0, 0, 0, 0.18);
+
+      --text-1: #0f172a;
+      --text-2: #475569;
+      --text-3: #94a3b8;
+
+      --blue: #2563eb;
+      --blue-subtle: rgba(37, 99, 235, 0.08);
+      --green: #059669;
+      --green-subtle: rgba(5, 150, 105, 0.08);
+      --amber: #d97706;
+      --amber-subtle: rgba(217, 119, 6, 0.08);
+      --red: #dc2626;
+      --red-subtle: rgba(220, 38, 38, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    html, body {
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--text-1);
+      font-family: var(--font-body);
+      user-select: none;
+    }
+
+    /* Edge-to-Edge Container: 100% of viewport */
+    .deck-container {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg);
+      z-index: 1;
+    }
+
+    .slide-viewport {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Top Progress Line */
+    .progress-bar-wrap {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: rgba(128, 128, 128, 0.1);
+      z-index: 100;
+    }
+
+    .progress-bar-fill {
+      height: 100%;
+      width: 33.333%;
+      background: var(--blue);
+      transition: width 0.3s ease;
+    }
+
+    /* Slides */
+    .slides-wrapper {
+      position: relative;
+      flex: 1;
+      width: 100%;
+      height: 100%;
+    }
+
+    .slide {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      background: var(--bg);
+      padding: clamp(28px, 3.8vw, 48px) clamp(36px, 5.2vw, 76px) clamp(22px, 3vw, 40px) clamp(36px, 5.2vw, 76px);
+      display: none;
+      flex-direction: column;
+      justify-content: space-between;
+      opacity: 0;
+    }
+
+    .slide.active {
+      display: flex;
+      opacity: 1;
+      animation: slideFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+
+    @keyframes slideFadeIn {
+      from {
+        opacity: 0;
+      }
+      to {
+        opacity: 1;
+      }
+    }
+
+    /* Minimal Badges */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 5px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+      font-family: var(--font-mono);
+      background: var(--surface-elevated);
+      color: var(--text-2);
+      border: 1px solid var(--border);
+    }
+
+    .badge.blue {
+      background: var(--blue-subtle);
+      color: var(--blue);
+      border-color: rgba(59, 130, 246, 0.3);
+    }
+
+    .badge.green {
+      background: var(--green-subtle);
+      color: var(--green);
+      border-color: rgba(16, 185, 129, 0.3);
+    }
+
+    .dot-live {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--green);
+    }
+
+    /* Headers */
+    .slide-header {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: clamp(16px, 2.2vw, 28px);
+    }
+
+    .slide-meta-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 4px;
+    }
+
+    .slide-meta-tags {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .slide-title {
+      font-family: var(--font-title);
+      font-size: clamp(28px, 2.7vw, 42px);
+      font-weight: 800;
+      letter-spacing: -0.025em;
+      line-height: 1.15;
+      color: var(--text-1);
+    }
+
+    .slide-subtitle {
+      font-size: clamp(14px, 1.15vw, 16.5px);
+      color: var(--text-2);
+      line-height: 1.45;
+    }
+
+    .footer-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-top: 1px solid var(--border);
+      padding-top: 14px;
+      font-size: 11.5px;
+      color: var(--text-3);
+      font-family: var(--font-mono);
+    }
+
+    /* ==========================================================================
+       SLIDE 0: TITLE & SYSTEM BLUEPRINT
+       ========================================================================== */
+    .hero-layout {
+      display: flex;
+      flex-direction: column;
+      gap: clamp(18px, 2.2vw, 32px);
+      flex: 1;
+      justify-content: center;
+    }
+
+    .hero-heading-group h1 {
+      font-family: var(--font-title);
+      font-size: clamp(42px, 4.6vw, 70px);
+      font-weight: 800;
+      letter-spacing: -0.035em;
+      line-height: 1.05;
+      color: var(--text-1);
+    }
+
+    .hero-heading-group h1 .brand-accent {
+      color: var(--blue);
+    }
+
+    .hero-heading-group p {
+      font-size: clamp(16px, 1.3vw, 20px);
+      color: var(--text-2);
+      margin-top: 8px;
+      line-height: 1.45;
+      max-width: 880px;
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: 1fr 340px;
+      gap: 22px;
+      align-items: stretch;
+    }
+
+    .diagram-panel {
+      background: var(--surface-subtle);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 18px 22px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+
+    .pillar-stack-home {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      justify-content: space-between;
+    }
+
+    .home-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .home-card-title {
+      font-family: var(--font-title);
+      font-size: 13.5px;
+      font-weight: 700;
+      color: var(--text-1);
+    }
+
+    .home-card-desc {
+      font-size: 12px;
+      color: var(--text-2);
+      line-height: 1.45;
+    }
+
+    /* ==========================================================================
+       SLIDE 1: VALUE ADD 01 (DYNAMIC MEMORY & HUMAN APPROVAL)
+       ========================================================================== */
+    .slide1-grid {
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 24px;
+      flex: 1;
+      align-items: stretch;
+      min-height: 0;
+    }
+
+    .steps-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      height: 100%;
+    }
+
+    .step-row {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .step-pill {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--blue);
+      background: var(--blue-subtle);
+      border: 1px solid rgba(59, 130, 246, 0.25);
+      border-radius: 4px;
+      width: 24px;
+      height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .step-main {
+      flex: 1;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .step-name {
+      font-family: var(--font-title);
+      font-size: 13.5px;
+      font-weight: 700;
+      color: var(--text-1);
+    }
+
+    .step-sub {
+      font-size: 12px;
+      color: var(--text-2);
+    }
+
+    .step-call {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-3);
+    }
+
+    .code-box-s1 {
+      background: var(--surface-subtle);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-2);
+      margin-top: auto;
+    }
+
+    .compare-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      height: 100%;
+    }
+
+    .box-compare {
+      border-radius: 8px;
+      padding: 16px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .box-compare.without {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--red);
+    }
+
+    .box-compare.with {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--green);
+    }
+
+    .box-label {
+      font-family: var(--font-title);
+      font-size: 12.5px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .box-compare.without .box-label { color: var(--red); }
+    .box-compare.with .box-label { color: var(--green); }
+
+    .bullet {
+      font-size: 12px;
+      color: var(--text-2);
+      line-height: 1.45;
+      display: flex;
+      gap: 8px;
+    }
+
+    /* ==========================================================================
+       SLIDE 2: VALUE ADD 02 (DECOUPLED GATEWAY & ZERO-TRUST SECURITY)
+       ========================================================================== */
+    .slide2-grid {
+      display: grid;
+      grid-template-columns: 1.25fr 0.75fr;
+      gap: 24px;
+      flex: 1;
+      align-items: stretch;
+      min-height: 0;
+    }
+
+    .arch-panel {
+      background: var(--surface-subtle);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 18px 22px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .pillar-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      justify-content: space-between;
+      height: 100%;
+    }
+
+    .pillar-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .pillar-title {
+      font-family: var(--font-title);
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text-1);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .pillar-desc {
+      font-size: 12.5px;
+      color: var(--text-2);
+      line-height: 1.45;
+    }
+
+    .pillar-points {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      margin-top: 2px;
+      font-size: 11.5px;
+      color: var(--text-3);
+      font-family: var(--font-mono);
+    }
+
+    /* Controls Dock (Autohides) */
+    .dock {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 6px 14px;
+      background: var(--surface);
+      border: 1px solid var(--border-strong);
+      border-radius: 9999px;
+      z-index: 999;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.35);
+      transition: opacity 0.3s ease, transform 0.3s ease;
+    }
+
+    .dock.hidden {
+      opacity: 0;
+      pointer-events: none;
+      transform: translate(-50%, 15px);
+    }
+
+    .dock-btn {
+      background: none;
+      border: none;
+      color: var(--text-2);
+      cursor: pointer;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.15s ease;
+    }
+
+    .dock-btn:hover {
+      color: var(--text-1);
+      background: var(--surface-elevated);
+    }
+
+    .dock-sep {
+      width: 1px;
+      height: 14px;
+      background: var(--border);
+    }
+
+    .dots {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--text-3);
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .dot.active {
+      width: 18px;
+      border-radius: 9999px;
+      background: var(--blue);
+    }
+
+    .counter {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-2);
+      min-width: 40px;
+      text-align: center;
+    }
+
+    /* Presenter Notes Modal */
+    .notes-box {
+      position: fixed;
+      right: 20px;
+      bottom: 68px;
+      width: 340px;
+      max-height: 380px;
+      background: var(--surface);
+      border: 1px solid var(--border-strong);
+      border-radius: 10px;
+      padding: 14px;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.45);
+      z-index: 1000;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(8px);
+      transition: all 0.2s ease;
+    }
+
+    .notes-box.open {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateY(0);
+    }
+
+    .notes-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 6px;
+      font-family: var(--font-title);
+      font-size: 12.5px;
+      font-weight: 700;
+      color: var(--text-1);
+    }
+
+    .notes-close {
+      background: none;
+      border: none;
+      color: var(--text-3);
+      cursor: pointer;
+      font-size: 16px;
+    }
+
+    .notes-body {
+      overflow-y: auto;
+      font-size: 12px;
+      color: var(--text-2);
+      line-height: 1.5;
+    }
+
+    /* Print: exact 16:9 PDF */
+    @page {
+      size: 16in 9in;
+      margin: 0;
+    }
+    @media print {
+      html, body {
+        background: #090d16 !important;
+        color: #f8fafc !important;
+        width: 100% !important;
+        height: auto !important;
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+      }
+      .dock, .notes-box, .progress-bar-wrap {
+        display: none !important;
+      }
+      .deck-container, .slide-viewport {
+        position: relative !important;
+        height: auto !important;
+        width: 100% !important;
+        display: block !important;
+      }
+      .slides-wrapper {
+        display: block !important;
+        height: auto !important;
+      }
+      .slide {
+        position: relative !important;
+        opacity: 1 !important;
+        visibility: visible !important;
+        pointer-events: auto !important;
+        transform: none !important;
+        display: flex !important;
+        flex-direction: column !important;
+        justify-content: space-between !important;
+        width: 16in !important;
+        height: 9in !important;
+        padding: 0.6in 0.8in !important;
+        page-break-after: always !important;
+        break-after: page !important;
+        box-sizing: border-box !important;
+        overflow: hidden !important;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="deck-container">
+    <div class="slide-viewport" id="viewport">
+      
+      <div class="progress-bar-wrap">
+        <div class="progress-bar-fill" id="progressBar"></div>
+      </div>
+
+      <div class="slides-wrapper">
+
+        <!-- ====================================================================
+             SLIDE 0: TITLE & SYSTEM BLUEPRINT
+             ==================================================================== -->
+        <section class="slide active" id="slide-0" data-slide-index="0">
+          
+          <div class="slide-meta-row">
+            <div class="slide-meta-tags">
+              <span class="badge blue">
+                <span class="dot-live"></span>
+                <span>OPM · FastMCP</span>
+              </span>
+              <span class="badge">AWS Bedrock · Claude 3.5</span>
+              <span class="badge">Odoo 17 XML-RPC</span>
+            </div>
+            <span class="badge">Architecture</span>
+          </div>
+
+          <div class="hero-layout">
+            
+            <div class="hero-heading-group">
+              <h1>
+                Odoo Process Memory <br>
+                <span class="brand-accent">Gateway Architecture</span>
+              </h1>
+              <p>
+                The process memory gateway bridging AI agents with enterprise ERPs. 
+                Captures team conventions from conversation, enforces human review, and injects scoped policy directly into model prompts.
+              </p>
+            </div>
+
+            <div class="hero-grid">
+              
+              <!-- Clean Responsive SVG Topology using CSS Variables -->
+              <div class="diagram-panel">
+                <div style="font-family: var(--font-mono); font-size: 11px; color: var(--text-3); margin-bottom: 8px; display: flex; justify-content: space-between;">
+                  <span>SYSTEM DATA FLOW</span>
+                  <span>JWT-AUTHENTICATED</span>
+                </div>
+                
+                <svg viewBox="0 0 740 180" width="100%" height="180">
+                  <defs>
+                    <marker id="m-arr" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+                      <path d="M0,0 L0,6 L6,3 z" fill="var(--text-3)" />
+                    </marker>
+                    <marker id="m-blue" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+                      <path d="M0,0 L0,6 L6,3 z" fill="var(--blue)" />
+                    </marker>
+                  </defs>
+
+                  <!-- Node 1: AI Agent -->
+                  <g transform="translate(15, 30)">
+                    <rect width="130" height="120" rx="8" fill="var(--surface)" stroke="var(--border)" stroke-width="1.2"/>
+                    <text x="65" y="32" fill="var(--text-1)" font-size="12" font-weight="700" text-anchor="middle" font-family="'Plus Jakarta Sans', sans-serif">AI Client</text>
+                    <text x="65" y="48" fill="var(--text-2)" font-size="9" text-anchor="middle" font-family="'JetBrains Mono', monospace">Claude / Bedrock</text>
+                    <line x1="12" y1="62" x2="118" y2="62" stroke="var(--border)"/>
+                    <rect x="12" y="74" width="106" height="22" rx="4" fill="var(--surface-subtle)" stroke="var(--border)"/>
+                    <text x="65" y="88" fill="var(--text-1)" font-size="8.5" text-anchor="middle" font-family="'JetBrains Mono', monospace">user_request</text>
+                    <text x="65" y="110" fill="var(--text-3)" font-size="7.5" text-anchor="middle" font-family="'JetBrains Mono', monospace">+ action_context</text>
+                  </g>
+
+                  <!-- Arrow 1 -->
+                  <path d="M 145 90 L 195 90" stroke="var(--text-3)" stroke-width="1.8" marker-end="url(#m-arr)"/>
+                  <text x="170" y="82" fill="var(--text-3)" font-size="8" font-family="'JetBrains Mono', monospace" text-anchor="middle">Bearer JWT</text>
+
+                  <!-- Node 2: OPM FastMCP Gateway -->
+                  <g transform="translate(200, 15)">
+                    <rect width="320" height="150" rx="8" fill="var(--surface-elevated)" stroke="var(--blue)" stroke-width="1.5"/>
+                    <rect x="8" y="8" width="304" height="26" rx="4" fill="var(--surface)"/>
+                    <text x="160" y="25" fill="var(--blue)" font-size="11" font-weight="700" text-anchor="middle" font-family="'JetBrains Mono', monospace">OPM GATEWAY (FastMCP)</text>
+                    
+                    <g transform="translate(14, 44)">
+                      <rect width="90" height="92" rx="6" fill="var(--surface)" stroke="var(--border)"/>
+                      <text x="45" y="24" fill="var(--text-1)" font-size="9.5" font-weight="700" text-anchor="middle" font-family="'Plus Jakarta Sans', sans-serif">1. Auth</text>
+                      <text x="45" y="38" fill="var(--text-2)" font-size="7.5" text-anchor="middle" font-family="'JetBrains Mono', monospace">Cognito Token</text>
+                      <rect x="8" y="52" width="74" height="28" rx="3" fill="var(--surface-subtle)"/>
+                      <text x="45" y="65" fill="var(--green)" font-size="7.5" font-weight="600" text-anchor="middle" font-family="'JetBrains Mono', monospace">Zero Spoofing</text>
+                      <text x="45" y="74" fill="var(--text-3)" font-size="6.5" text-anchor="middle" font-family="'JetBrains Mono', monospace">Tenant Verified</text>
+                    </g>
+
+                    <g transform="translate(114, 44)">
+                      <rect width="92" height="92" rx="6" fill="var(--surface)" stroke="var(--border)"/>
+                      <text x="46" y="24" fill="var(--text-1)" font-size="9.5" font-weight="700" text-anchor="middle" font-family="'Plus Jakarta Sans', sans-serif">2. Memory</text>
+                      <text x="46" y="38" fill="var(--text-2)" font-size="7.5" text-anchor="middle" font-family="'JetBrains Mono', monospace">Active Scope</text>
+                      <rect x="8" y="52" width="76" height="28" rx="3" fill="var(--surface-subtle)"/>
+                      <text x="46" y="65" fill="var(--blue)" font-size="7.5" font-weight="600" text-anchor="middle" font-family="'JetBrains Mono', monospace">Canonical v1</text>
+                      <text x="46" y="74" fill="var(--text-3)" font-size="6.5" text-anchor="middle" font-family="'JetBrains Mono', monospace">Human Approved</text>
+                    </g>
+
+                    <g transform="translate(216, 44)">
+                      <rect width="90" height="92" rx="6" fill="var(--surface)" stroke="var(--border)"/>
+                      <text x="45" y="24" fill="var(--text-1)" font-size="9.5" font-weight="700" text-anchor="middle" font-family="'Plus Jakarta Sans', sans-serif">3. Dispatch</text>
+                      <text x="45" y="38" fill="var(--text-2)" font-size="7.5" text-anchor="middle" font-family="'JetBrains Mono', monospace">Schema Shield</text>
+                      <rect x="8" y="52" width="74" height="28" rx="3" fill="var(--surface-subtle)"/>
+                      <text x="45" y="65" fill="var(--amber)" font-size="7.5" font-weight="600" text-anchor="middle" font-family="'JetBrains Mono', monospace">AWS Secrets</text>
+                      <text x="45" y="74" fill="var(--text-3)" font-size="6.5" text-anchor="middle" font-family="'JetBrains Mono', monospace">Masked Pass</text>
+                    </g>
+                  </g>
+
+                  <!-- Arrow 2 -->
+                  <path d="M 520 90 L 575 90" stroke="var(--blue)" stroke-width="1.8" marker-end="url(#m-blue)"/>
+                  <text x="548" y="82" fill="var(--blue)" font-size="8" font-family="'JetBrains Mono', monospace" text-anchor="middle">XML-RPC</text>
+
+                  <!-- Node 3: Odoo 17 ERP Target -->
+                  <g transform="translate(580, 30)">
+                    <rect width="140" height="120" rx="8" fill="var(--surface)" stroke="var(--green)" stroke-width="1.2"/>
+                    <text x="70" y="32" fill="var(--text-1)" font-size="12" font-weight="700" text-anchor="middle" font-family="'Plus Jakarta Sans', sans-serif">Odoo 17 ERP</text>
+                    <text x="70" y="48" fill="var(--green)" font-size="9" text-anchor="middle" font-family="'JetBrains Mono', monospace">/xmlrpc/2/object</text>
+                    <line x1="12" y1="62" x2="128" y2="62" stroke="var(--border)"/>
+                    <rect x="12" y="74" width="116" height="22" rx="4" fill="var(--surface-subtle)" stroke="var(--border)"/>
+                    <text x="70" y="88" fill="var(--text-1)" font-size="8.5" text-anchor="middle" font-family="'JetBrains Mono', monospace">create_record()</text>
+                    <text x="70" y="110" fill="var(--text-3)" font-size="7.5" text-anchor="middle" font-family="'JetBrains Mono', monospace">Trace Evidence</text>
+                  </g>
+                </svg>
+              </div>
+
+              <!-- 3 Right Column Pillars -->
+              <div class="pillar-stack-home">
+                <div class="home-card">
+                  <span class="home-card-title">Zero Business Logic in Gateway</span>
+                  <span class="home-card-desc">OPM never hardcodes Odoo task templates or Gantt recipes. It remains a pure policy gateway.</span>
+                </div>
+                <div class="home-card">
+                  <span class="home-card-title">Human Quarantine Gate</span>
+                  <span class="home-card-desc">Extracted rules stay quarantined as <code>pending_review</code> until approved by an owner.</span>
+                </div>
+                <div class="home-card">
+                  <span class="home-card-title">Scoped Memory Injection</span>
+                  <span class="home-card-desc">Matches active rules to the specific action context, saving 95%+ prompt tokens.</span>
+                </div>
+              </div>
+
+            </div>
+
+          </div>
+
+          <div class="footer-bar">
+            <span>ODOO PROCESS MEMORY (OPM)</span>
+            <span>SLIDE 1 / 3 · PRESS [→] OR SPACE TO CONTINUE</span>
+          </div>
+
+        </section>
+
+
+        <!-- ====================================================================
+             SLIDE 1: VALUE ADD 01 (DYNAMIC MEMORY & HUMAN APPROVAL)
+             ==================================================================== -->
+        <section class="slide" id="slide-1" data-slide-index="1">
+          
+          <div class="slide-header">
+            <div class="slide-meta-row">
+              <div class="slide-meta-tags">
+                <span class="badge blue">Value Add 01</span>
+                <span class="badge">Governance</span>
+              </div>
+              <span class="badge green">Zero Model Drift</span>
+            </div>
+            <h2 class="slide-title">Dynamic Memory with Human Approval</h2>
+            <p class="slide-subtitle">
+              Eliminating model amnesia and prompt stuffing without writing custom code.
+            </p>
+          </div>
+
+          <div class="slide1-grid">
+            
+            <!-- Left: 4 Stages + Audited JSON -->
+            <div class="steps-stack">
+              
+              <div class="step-row">
+                <div class="step-pill">1</div>
+                <div class="step-main">
+                  <div>
+                    <span class="step-name">Conversational Ingestion</span>
+                    <span class="step-sub"> — Plain language statement in team chat</span>
+                  </div>
+                  <span class="step-call">process_remember_instruction</span>
+                </div>
+              </div>
+
+              <div class="step-row" style="border-color: rgba(245,158,11,0.4); background: var(--surface-card);">
+                <div class="step-pill" style="color: var(--amber); background: var(--amber-subtle); border-color: rgba(245,158,11,0.3);">2</div>
+                <div class="step-main">
+                  <div>
+                    <span class="step-name">Staging Quarantine</span>
+                    <span class="step-sub"> — Non-enforceable; candidate isolated</span>
+                  </div>
+                  <span class="step-call" style="color: var(--amber);">status: pending_review</span>
+                </div>
+              </div>
+
+              <div class="step-row" style="border-color: rgba(16,185,129,0.35);">
+                <div class="step-pill" style="color: var(--green); background: var(--green-subtle); border-color: rgba(16,185,129,0.3);">3</div>
+                <div class="step-main">
+                  <div>
+                    <span class="step-name">Human Approval Gate</span>
+                    <span class="step-sub"> — Owner reviews, edits, or approves</span>
+                  </div>
+                  <span class="step-call">process_review_candidate</span>
+                </div>
+              </div>
+
+              <div class="step-row">
+                <div class="step-pill">4</div>
+                <div class="step-main">
+                  <div>
+                    <span class="step-name">Context-Scoped Injection</span>
+                    <span class="step-sub"> — Injects matching policy into Bedrock</span>
+                  </div>
+                  <span class="step-call">process_get_context</span>
+                </div>
+              </div>
+
+              <!-- Concise JSON Preview -->
+              <div class="code-box-s1">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 6px; color: var(--text-3); font-size: 10.5px;">
+                  <span>AUDITED CANONICAL RULE</span>
+                  <span style="color: var(--green);">CANONICAL v1 · APPROVED</span>
+                </div>
+                <pre style="line-height: 1.45;">{
+  "rule_id": "rule_eng_prefix_001",
+  "status": "approved",
+  "rule_text": "Engineering tasks must start with [ENG] tag",
+  "scope": { "system": "odoo", "resource": "project.task" },
+  "reviewer": "lead@company.com"
+}</pre>
+              </div>
+
+            </div>
+
+            <!-- Right: Concise Side-by-Side Comparison -->
+            <div class="compare-stack">
+              
+              <div class="box-compare without">
+                <span class="box-label">Without OPM (Traditional Approach)</span>
+                <div class="bullet">
+                  <span>•</span>
+                  <span><strong>Hardcoded scripts:</strong> Every policy check requires custom Python and redeploys.</span>
+                </div>
+                <div class="bullet">
+                  <span>•</span>
+                  <span><strong>Model amnesia:</strong> Models forget rules between sessions, violating standards.</span>
+                </div>
+                <div class="bullet">
+                  <span>•</span>
+                  <span><strong>Prompt bloat:</strong> 30-page SOPs dumped into every request trigger hallucinations.</span>
+                </div>
+              </div>
+
+              <div class="box-compare with">
+                <span class="box-label">With OPM Process Memory</span>
+                <div class="bullet">
+                  <span>•</span>
+                  <span><strong>Zero-code updates:</strong> Leads define enforceable rules in plain English.</span>
+                </div>
+                <div class="bullet">
+                  <span>•</span>
+                  <span><strong>Quarantine immunity:</strong> 0 unapproved rules reach model prompts or ERP.</span>
+                </div>
+                <div class="bullet">
+                  <span>•</span>
+                  <span><strong>Minimal token overhead:</strong> Injects only relevant rules (~80 tokens vs 4,000+).</span>
+                </div>
+              </div>
+
+              <div class="home-card" style="background: var(--surface-subtle); padding: 14px 16px;">
+                <span class="home-card-title">Key Outcome:</span>
+                <span class="home-card-desc">Business policies stay in company memory, not in custom code. Developers never modify gateway services for operational policy changes.</span>
+              </div>
+
+            </div>
+
+          </div>
+
+          <div class="footer-bar">
+            <span>VALUE ADD 01: DYNAMIC PROCESS MEMORY</span>
+            <span>SLIDE 2 / 3 · PRESS [→] OR SPACE FOR VALUE ADD 02</span>
+          </div>
+
+        </section>
+
+
+        <!-- ====================================================================
+             SLIDE 2: VALUE ADD 02 (DECOUPLED GATEWAY & ZERO-TRUST SECURITY)
+             ==================================================================== -->
+        <section class="slide" id="slide-2" data-slide-index="2">
+          
+          <div class="slide-header">
+            <div class="slide-meta-row">
+              <div class="slide-meta-tags">
+                <span class="badge blue">Value Add 02</span>
+                <span class="badge">Security & Dispatch</span>
+              </div>
+              <span class="badge green">Zero-Trust Gateway</span>
+            </div>
+            <h2 class="slide-title">Decoupled Gateway & Zero-Trust Dispatch</h2>
+            <p class="slide-subtitle">
+              Protecting core ERP databases from unconstrained AI access without hardcoding business workflows.
+            </p>
+          </div>
+
+          <div class="slide2-grid">
+            
+            <!-- Left: Architecture SVG Flow -->
+            <div class="arch-panel">
+              <div style="font-family: var(--font-mono); font-size: 11px; color: var(--text-3); display: flex; justify-content: space-between;">
+                <span>ENCRYPTED EXECUTION PIPELINE</span>
+                <span>COGNITO ➔ BEDROCK ➔ ODOO 17</span>
+              </div>
+
+              <svg viewBox="0 0 740 330" width="100%" height="330">
+                <defs>
+                  <marker id="arr-c" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+                    <path d="M0,0 L0,6 L6,3 z" fill="var(--blue)" />
+                  </marker>
+                  <marker id="arr-g" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+                    <path d="M0,0 L0,6 L6,3 z" fill="var(--green)" />
+                  </marker>
+                </defs>
+
+                <!-- Boundary -->
+                <rect x="135" y="20" width="455" height="290" rx="8" fill="var(--surface)" stroke="var(--blue)" stroke-width="1.2" stroke-dasharray="5,4"/>
+                <text x="148" y="42" fill="var(--blue)" font-size="10" font-family="'JetBrains Mono', monospace" font-weight="700">OPM GATEWAY ISOLATION BOUNDARY</text>
+
+                <!-- Step 1: Cognito Ingress -->
+                <g transform="translate(10, 95)">
+                  <rect width="105" height="130" rx="8" fill="var(--surface)" stroke="var(--border)" stroke-width="1.2"/>
+                  <text x="52" y="28" fill="var(--text-1)" font-size="11.5" font-weight="700" text-anchor="middle" font-family="'Plus Jakarta Sans', sans-serif">Cognito Auth</text>
+                  <text x="52" y="46" fill="var(--text-2)" font-size="9" text-anchor="middle" font-family="'JetBrains Mono', monospace">Bearer JWT</text>
+                  <line x1="10" y1="58" x2="95" y2="58" stroke="var(--border)"/>
+                  <rect x="10" y="70" width="85" height="42" rx="4" fill="var(--surface-subtle)"/>
+                  <text x="52" y="88" fill="var(--green)" font-size="8.5" font-weight="700" text-anchor="middle" font-family="'JetBrains Mono', monospace">Anti-Spoofing</text>
+                  <text x="52" y="102" fill="var(--text-3)" font-size="7.5" text-anchor="middle" font-family="'JetBrains Mono', monospace">Server Resolved</text>
+                </g>
+
+                <path d="M 115 160 L 150 160" stroke="var(--blue)" stroke-width="1.8" marker-end="url(#arr-c)"/>
+                <text x="132" y="152" fill="var(--text-3)" font-size="8" font-family="'JetBrains Mono', monospace" text-anchor="middle">Token</text>
+
+                <!-- Step 2: Context Retriever -->
+                <g transform="translate(152, 75)">
+                  <rect width="125" height="170" rx="8" fill="var(--surface)" stroke="var(--border)" stroke-width="1.2"/>
+                  <text x="62" y="26" fill="var(--text-1)" font-size="11.5" font-weight="700" text-anchor="middle" font-family="'Plus Jakarta Sans', sans-serif">Retriever</text>
+                  <text x="62" y="42" fill="var(--text-2)" font-size="8.5" text-anchor="middle" font-family="'JetBrains Mono', monospace">Scope Matching</text>
+                  <line x1="10" y1="52" x2="115" y2="52" stroke="var(--border)"/>
+                  <rect x="10" y="62" width="105" height="24" rx="4" fill="var(--surface-subtle)"/>
+                  <text x="62" y="78" fill="var(--text-1)" font-size="8" text-anchor="middle" font-family="'JetBrains Mono', monospace">[ENG] Tag Rule (v1)</text>
+                  <rect x="10" y="92" width="105" height="24" rx="4" fill="var(--surface-subtle)"/>
+                  <text x="62" y="108" fill="var(--text-1)" font-size="8" text-anchor="middle" font-family="'JetBrains Mono', monospace">Ops Sign-off (v2)</text>
+                  <rect x="10" y="124" width="105" height="28" rx="4" fill="var(--green-subtle)"/>
+                  <text x="62" y="142" fill="var(--green)" font-size="8.5" font-weight="600" text-anchor="middle" font-family="'JetBrains Mono', monospace">Zero Token Waste</text>
+                </g>
+
+                <path d="M 277 160 L 312 160" stroke="var(--blue)" stroke-width="1.8" marker-end="url(#arr-c)"/>
+                <text x="294" y="152" fill="var(--blue)" font-size="8" font-family="'JetBrains Mono', monospace" text-anchor="middle">Rules</text>
+
+                <!-- Step 3: Bedrock Prompt Boundary -->
+                <g transform="translate(314, 60)">
+                  <rect width="138" height="200" rx="8" fill="var(--surface-subtle)" stroke="var(--blue)" stroke-width="1.5"/>
+                  <text x="69" y="26" fill="var(--blue)" font-size="12" font-weight="700" text-anchor="middle" font-family="'Plus Jakarta Sans', sans-serif">AWS Bedrock</text>
+                  <text x="69" y="42" fill="var(--text-2)" font-size="9" text-anchor="middle" font-family="'JetBrains Mono', monospace">Claude 3.5 Sonnet</text>
+                  <rect x="8" y="54" width="122" height="58" rx="4" fill="var(--surface)"/>
+                  <text x="69" y="72" fill="var(--text-1)" font-size="8.5" text-anchor="middle" font-family="'JetBrains Mono', monospace">Prompt Boundary</text>
+                  <text x="69" y="87" fill="var(--text-3)" font-size="7.5" text-anchor="middle" font-family="'JetBrains Mono', monospace">+ Scoped Rules</text>
+                  <text x="69" y="100" fill="var(--text-3)" font-size="7.5" text-anchor="middle" font-family="'JetBrains Mono', monospace">+ Registered Schemas</text>
+                  <rect x="8" y="122" width="122" height="64" rx="4" fill="var(--blue-subtle)" stroke="var(--blue)"/>
+                  <text x="69" y="142" fill="var(--blue)" font-size="9" font-weight="700" text-anchor="middle" font-family="'JetBrains Mono', monospace">1 Structured Call</text>
+                  <text x="69" y="158" fill="var(--text-1)" font-size="7.5" text-anchor="middle" font-family="'JetBrains Mono', monospace">create_record(values)</text>
+                  <text x="69" y="172" fill="var(--green)" font-size="7.5" text-anchor="middle" font-family="'JetBrains Mono', monospace">Schema Validated</text>
+                </g>
+
+                <path d="M 452 160 L 485 160" stroke="var(--blue)" stroke-width="1.8" marker-end="url(#arr-c)"/>
+                <text x="468" y="152" fill="var(--blue)" font-size="8" font-family="'JetBrains Mono', monospace" text-anchor="middle">Call</text>
+
+                <!-- Step 4: Dispatcher -->
+                <g transform="translate(487, 75)">
+                  <rect width="120" height="170" rx="8" fill="var(--surface)" stroke="var(--border)" stroke-width="1.2"/>
+                  <text x="60" y="26" fill="var(--text-1)" font-size="11.5" font-weight="700" text-anchor="middle" font-family="'Plus Jakarta Sans', sans-serif">Dispatcher</text>
+                  <text x="60" y="42" fill="var(--text-2)" font-size="8.5" text-anchor="middle" font-family="'JetBrains Mono', monospace">Protocol Shield</text>
+                  <line x1="8" y1="52" x2="112" y2="52" stroke="var(--border)"/>
+                  <rect x="8" y="62" width="104" height="26" rx="4" fill="var(--amber-subtle)"/>
+                  <text x="60" y="79" fill="var(--amber)" font-size="8" font-weight="700" text-anchor="middle" font-family="'JetBrains Mono', monospace">AWS Secrets Mgr</text>
+                  <rect x="8" y="94" width="104" height="24" rx="4" fill="var(--red-subtle)"/>
+                  <text x="60" y="110" fill="var(--red)" font-size="7.5" font-weight="600" text-anchor="middle" font-family="'JetBrains Mono', monospace">Blocks execute_kw</text>
+                  <rect x="8" y="124" width="104" height="28" rx="4" fill="var(--surface-subtle)"/>
+                  <text x="60" y="142" fill="var(--green)" font-size="8.5" font-weight="600" text-anchor="middle" font-family="'JetBrains Mono', monospace">Audit Evidence</text>
+                </g>
+
+                <path d="M 607 160 L 638 160" stroke="var(--green)" stroke-width="1.8" marker-end="url(#arr-g)"/>
+                <text x="622" y="152" fill="var(--green)" font-size="8" font-family="'JetBrains Mono', monospace" text-anchor="middle">XML-RPC</text>
+
+                <!-- Step 5: Downstream Odoo Target -->
+                <g transform="translate(640, 95)">
+                  <rect width="90" height="130" rx="8" fill="var(--surface)" stroke="var(--green)" stroke-width="1.2"/>
+                  <text x="45" y="28" fill="var(--green)" font-size="11.5" font-weight="800" text-anchor="middle" font-family="'Plus Jakarta Sans', sans-serif">Odoo 17</text>
+                  <text x="45" y="46" fill="var(--text-2)" font-size="9" text-anchor="middle" font-family="'JetBrains Mono', monospace">/xmlrpc/2/object</text>
+                  <line x1="8" y1="58" x2="82" y2="58" stroke="var(--border)"/>
+                  <rect x="8" y="70" width="74" height="42" rx="4" fill="var(--surface-subtle)"/>
+                  <text x="45" y="88" fill="var(--text-1)" font-size="8.5" font-weight="700" text-anchor="middle" font-family="'JetBrains Mono', monospace">Executed</text>
+                  <text x="45" y="102" fill="var(--green)" font-size="8" text-anchor="middle" font-family="'JetBrains Mono', monospace">Record #842</text>
+                </g>
+              </svg>
+
+              <div style="background: var(--surface); border-radius: 6px; padding: 8px 14px; display: flex; justify-content: space-between; font-size: 11px; font-family: var(--font-mono); color: var(--text-2);">
+                <span>Credentials masked in traces</span>
+                <span style="color: var(--blue);">Schema-validated dispatch</span>
+              </div>
+            </div>
+
+            <!-- Right: 3 Key Guardrails -->
+            <div class="pillar-stack">
+              
+              <div class="pillar-box">
+                <span class="pillar-title">
+                  <span style="color: var(--blue);">1.</span>
+                  <span>Pure Gateway Decoupling</span>
+                </span>
+                <p class="pillar-desc">
+                  OPM contains zero hardcoded Odoo task recipes, Gantt formulas, or status workflows. It acts purely as a protocol and policy router.
+                </p>
+                <div class="pillar-points">
+                  <span>• Standard FastMCP tool contracts</span>
+                  <span>• Decoupled from ERP API shifts</span>
+                </div>
+              </div>
+
+              <div class="pillar-box">
+                <span class="pillar-title">
+                  <span style="color: var(--blue);">2.</span>
+                  <span>Cryptographic Multi-Tenancy</span>
+                </span>
+                <p class="pillar-desc">
+                  Tenant and user identity is resolved cryptographically from Cognito JWTs. Client applications cannot spoof company IDs or roles.
+                </p>
+                <div class="pillar-points">
+                  <span>• Zero client-controlled identity</span>
+                  <span>• Owner/reviewer role enforcement</span>
+                </div>
+              </div>
+
+              <div class="pillar-box">
+                <span class="pillar-title">
+                  <span style="color: var(--blue);">3.</span>
+                  <span>Credential Masking & Audit Trace</span>
+                </span>
+                <p class="pillar-desc">
+                  Downstream ERP passwords are resolved via AWS Secrets Manager and masked from logs. Unsafe raw endpoints like <code>execute_kw</code> are blocked.
+                </p>
+                <div class="pillar-points">
+                  <span>• Model never sees credentials</span>
+                  <span>• 100% deterministic trace telemetry</span>
+                </div>
+              </div>
+
+            </div>
+
+          </div>
+
+          <div class="footer-bar">
+            <span>VALUE ADD 02: ZERO-TRUST DOWNSTREAM DISPATCH</span>
+            <span>SLIDE 3 / 3 · PRESS [F] FOR FULLSCREEN · [T] FOR WHITE MODE · [P] TO EXPORT PDF</span>
+          </div>
+
+        </section>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- Dock -->
+  <nav class="dock" id="controlDock" aria-label="Controls">
+    <button class="dock-btn" onclick="prevSlide()" title="Previous (Left Arrow)">
+      <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M15 19l-7-7 7-7"/></svg>
+    </button>
+    
+    <div class="dots">
+      <div class="dot active" onclick="goToSlide(0)" title="Slide 1"></div>
+      <div class="dot" onclick="goToSlide(1)" title="Slide 2"></div>
+      <div class="dot" onclick="goToSlide(2)" title="Slide 3"></div>
+    </div>
+
+    <button class="dock-btn" onclick="nextSlide()" title="Next (Right Arrow / Space)">
+      <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/></svg>
+    </button>
+
+    <div class="dock-sep"></div>
+
+    <span class="counter" id="counterText">1 / 3</span>
+
+    <div class="dock-sep"></div>
+
+    <button class="dock-btn" onclick="toggleNotes()" title="Speaker Notes (N)">
+      <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/></svg>
+    </button>
+
+    <button class="dock-btn" onclick="toggleFullscreen()" title="Toggle Fullscreen (F)">
+      <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/></svg>
+    </button>
+
+    <button class="dock-btn" onclick="toggleTheme()" title="Toggle White/Dark Mode (T)">
+      <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/></svg>
+    </button>
+
+    <button class="dock-btn" onclick="exportPdf()" title="Export PDF (P)">
+      <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/></svg>
+    </button>
+  </nav>
+
+  <!-- Notes -->
+  <aside class="notes-box" id="notesBox" aria-label="Speaker Notes">
+    <div class="notes-head">
+      <span>Speaker Talk Track</span>
+      <button class="notes-close" onclick="toggleNotes()">&times;</button>
+    </div>
+    <div class="notes-body" id="notesBody"></div>
+  </aside>
+
+  <script>
+    let currentSlide = 0;
+    const totalSlides = 3;
+    const slides = document.querySelectorAll('.slide');
+    const dots = document.querySelectorAll('.dot');
+    const counterText = document.getElementById('counterText');
+    const progressBar = document.getElementById('progressBar');
+    const notesBox = document.getElementById('notesBox');
+    const notesBody = document.getElementById('notesBody');
+    const controlDock = document.getElementById('controlDock');
+
+    const talkTracks = [
+      `<strong>Cover & Architecture Blueprint:</strong><br><br>
+      "OPM acts as a pure Process Memory Gateway. It captures operational conventions from team conversation, enforces human review before anything executes, and injects scoped rules directly into Bedrock prompts—keeping Odoo business workflows completely decoupled."`,
+
+      `<strong>Value Add 1 (Dynamic Governed Memory):</strong><br><br>
+      "When someone states an operational rule in chat—like requiring [ENG] tags—OPM extracts it into quarantine staging. It cannot enforce until an authorized reviewer approves it.<br><br>
+      When an action runs, OPM matches only relevant rules, reducing prompt overhead from thousands of tokens to fewer than 100."`,
+
+      `<strong>Value Add 2 (Decoupled Zero-Trust Gateway):</strong><br><br>
+      "OPM does not contain hardcoded Odoo business recipes. Tenant identity is cryptographically resolved from Cognito JWTs, downstream ERP credentials stay in AWS Secrets Manager, and raw unvalidated endpoints like execute_kw are blocked."`
+    ];
+
+    function updateSlide() {
+      slides.forEach((s, idx) => {
+        s.classList.remove('active', 'previous');
+        if (idx === currentSlide) {
+          s.classList.add('active');
+        } else if (idx < currentSlide) {
+          s.classList.add('previous');
+        }
+      });
+
+      dots.forEach((dot, idx) => {
+        dot.classList.toggle('active', idx === currentSlide);
+      });
+
+      counterText.textContent = `${currentSlide + 1} / ${totalSlides}`;
+      progressBar.style.width = `${((currentSlide + 1) / totalSlides) * 100}%`;
+      notesBody.innerHTML = talkTracks[currentSlide];
+    }
+
+    function nextSlide() {
+      if (currentSlide < totalSlides - 1) {
+        currentSlide++;
+        updateSlide();
+      }
+    }
+
+    function prevSlide() {
+      if (currentSlide > 0) {
+        currentSlide--;
+        updateSlide();
+      }
+    }
+
+    function goToSlide(idx) {
+      if (idx >= 0 && idx < totalSlides) {
+        currentSlide = idx;
+        updateSlide();
+      }
+    }
+
+    function toggleNotes() {
+      notesBox.classList.toggle('open');
+    }
+
+    function toggleFullscreen() {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(err => {
+          console.error(`Fullscreen request failed: ${err.message}`);
+        });
+      } else {
+        document.exitFullscreen();
+      }
+    }
+
+    function toggleTheme() {
+      const html = document.documentElement;
+      const nextTheme = html.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+      html.setAttribute('data-theme', nextTheme);
+    }
+
+    function exportPdf() {
+      window.print();
+    }
+
+    // Keyboard Navigation
+    window.addEventListener('keydown', (e) => {
+      if (['ArrowRight', ' ', 'PageDown'].includes(e.key)) {
+        e.preventDefault();
+        nextSlide();
+      } else if (['ArrowLeft', 'Backspace', 'PageUp'].includes(e.key)) {
+        e.preventDefault();
+        prevSlide();
+      } else if (['Home'].includes(e.key)) {
+        goToSlide(0);
+      } else if (['End'].includes(e.key)) {
+        goToSlide(totalSlides - 1);
+      } else if (e.key.toLowerCase() === 'f') {
+        toggleFullscreen();
+      } else if (e.key.toLowerCase() === 'n') {
+        toggleNotes();
+      } else if (e.key.toLowerCase() === 't') {
+        toggleTheme();
+      } else if (e.key.toLowerCase() === 'p') {
+        exportPdf();
+      }
+    });
+
+    // Autohide dock on inactivity
+    let hideTimer = null;
+    function resetDockTimer() {
+      controlDock.classList.remove('hidden');
+      clearTimeout(hideTimer);
+      hideTimer = setTimeout(() => {
+        controlDock.classList.add('hidden');
+      }, 2500);
+    }
+
+    window.addEventListener('mousemove', resetDockTimer);
+    window.addEventListener('click', resetDockTimer);
+    window.addEventListener('keydown', resetDockTimer);
+
+    updateSlide();
+    resetDockTimer();
+  </script>
+</body>
+</html>

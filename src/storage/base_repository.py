@@ -146,6 +146,15 @@ class BaseRepository(ABC):
         notes: str | None = None,
     ) -> CanonicalRule: ...
 
+    @abstractmethod
+    def delete_canonical_rule(
+        self,
+        rule_id: str,
+        client_id: str,
+        deleted_by: str,
+        notes: str | None = None,
+    ) -> bool: ...
+
     # 6. Downstream MCP Server Registry
     @abstractmethod
     def upsert_downstream_mcp(

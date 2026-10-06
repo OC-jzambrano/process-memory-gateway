@@ -321,6 +321,74 @@ class HostedProcessMemoryService:
             ),
         )
 
+    def delete_canonical_rule(
+        self,
+        rule_id: str,
+        notes: str | None = None,
+    ) -> dict[str, Any]:
+        """Permanently delete one canonical rule for the authenticated company."""
+        ctx = get_current_context()
+        self.auth_resolver.require_role(ctx, [RoleType.OWNER, RoleType.REVIEWER])
+
+        rule = self.repo.get_rule(rule_id=rule_id, client_id=ctx.company_id)
+        if not rule:
+            raise ValueError(
+                f"Canonical Rule with ID '{rule_id}' not found for tenant '{ctx.company_id}'."
+            )
+
+        self.repo.delete_canonical_rule(
+            rule_id=rule_id,
+            client_id=ctx.company_id,
+            deleted_by=ctx.user_id,
+            notes=notes,
+        )
+        return {
+            "status": "deleted",
+            "rule_id": rule_id,
+            "company_id": ctx.company_id,
+            "company_slug": ctx.company_slug,
+            "deleted_by": ctx.user_id,
+            "message": f"Canonical Rule '{rule_id}' has been permanently deleted.",
+        }
+
+    def delete_canonical_rules_batch(
+        self,
+        rule_ids: list[str],
+        notes: str | None = None,
+    ) -> dict[str, Any]:
+        """Permanently delete multiple canonical rules in batch for the authenticated company."""
+        ctx = get_current_context()
+        self.auth_resolver.require_role(ctx, [RoleType.OWNER, RoleType.REVIEWER])
+
+        deleted_ids: list[str] = []
+        failed_items: list[dict[str, str]] = []
+
+        for r_id in rule_ids:
+            try:
+                rule = self.repo.get_rule(rule_id=r_id, client_id=ctx.company_id)
+                if not rule:
+                    failed_items.append({"rule_id": r_id, "error": f"Rule '{r_id}' not found."})
+                    continue
+                self.repo.delete_canonical_rule(
+                    rule_id=r_id,
+                    client_id=ctx.company_id,
+                    deleted_by=ctx.user_id,
+                    notes=notes,
+                )
+                deleted_ids.append(r_id)
+            except Exception as e:  # noqa: BLE001
+                failed_items.append({"rule_id": r_id, "error": str(e)})
+
+        return {
+            "status": "completed",
+            "company_id": ctx.company_id,
+            "company_slug": ctx.company_slug,
+            "deleted_count": len(deleted_ids),
+            "failed_count": len(failed_items),
+            "deleted": deleted_ids,
+            "failed": failed_items,
+        }
+
     # --- 4. GET COMPANY CONTEXT (MEMORY PACK) ---
     def get_company_context(
         self,

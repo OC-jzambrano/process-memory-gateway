@@ -1343,10 +1343,143 @@ class CompanyMCPHandler:
             set_current_context(None)
 
 
+async def _resolve_rules_api_context(request: Request, company_slug: str) -> RequestContext:
+    """Resolves authenticated RequestContext for rules API operations."""
+    auth_header = request.headers.get("authorization", "")
+    api_key_header = request.headers.get("x-api-key", "") or request.headers.get("x-consumer-api-key", "")
+    client_agent = request.headers.get("user-agent", "rules-api-client")
+
+    token = ""
+    is_api_key = False
+    if api_key_header:
+        token = api_key_header.strip()
+        is_api_key = True
+    elif auth_header and auth_header.lower().startswith("bearer "):
+        token = auth_header[7:].strip()
+        if token.startswith("opm_"):
+            is_api_key = True
+
+    if not token:
+        raise AuthenticationError("Missing Bearer token or API key.")
+
+    if is_api_key:
+        req_ctx = _resolve_api_key_context(token)
+        if not req_ctx:
+            raise AuthenticationError("Invalid or revoked API key.")
+        if req_ctx.company_slug != company_slug:
+            raise AuthorizationError("API key is not authorized for this company.")
+        return req_ctx
+    else:
+        claims = token_verifier.verify_token(token)
+        req_ctx = resolve_authenticated_context(
+            claims=claims,
+            company_slug=company_slug,
+            repo=repo,
+            client_agent=client_agent,
+        )
+        return req_ctx
+
+
+def _get_service():
+    from src.api.service import HostedProcessMemoryService
+    return HostedProcessMemoryService(repo=repo)
+
+
+async def rule_delete_endpoint(request: Request) -> JSONResponse:
+    """Delete a single canonical rule for the specified company."""
+    company_slug = request.path_params.get("company_slug", "").strip()
+    rule_id = request.path_params.get("rule_id", "").strip()
+
+    if not company_slug:
+        return JSONResponse({"error": "bad_request", "message": "Missing company_slug in URL."}, status_code=400)
+    if not rule_id:
+        return JSONResponse({"error": "bad_request", "message": "Missing rule_id in URL."}, status_code=400)
+
+    try:
+        ctx = await _resolve_rules_api_context(request, company_slug)
+    except AuthenticationError as e:
+        return JSONResponse({"error": "unauthorized", "message": sanitize_evidence(str(e))}, status_code=401)
+    except AuthorizationError as e:
+        return JSONResponse({"error": "forbidden", "message": sanitize_evidence(str(e))}, status_code=403)
+
+    notes = request.query_params.get("notes")
+    if not notes and request.headers.get("content-type", "").startswith("application/json"):
+        try:
+            body = await request.json()
+            notes = body.get("notes")
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+    set_current_context(ctx)
+    try:
+        service = _get_service()
+        result = service.delete_canonical_rule(rule_id=rule_id, notes=notes)
+        return JSONResponse(result, status_code=200)
+    except AuthorizationError as e:
+        return JSONResponse({"error": "forbidden", "message": sanitize_evidence(str(e))}, status_code=403)
+    except ValueError as e:
+        return JSONResponse({"error": "not_found", "message": sanitize_evidence(str(e))}, status_code=404)
+    except Exception as e:  # noqa: BLE001
+        logger.error("Error deleting rule %s: %s", rule_id, sanitize_evidence(str(e)))
+        return JSONResponse({"error": "internal_error", "message": sanitize_evidence(str(e))}, status_code=500)
+    finally:
+        set_current_context(None)
+
+
+async def rules_batch_delete_endpoint(request: Request) -> JSONResponse:
+    """Delete multiple canonical rules in batch for the specified company."""
+    company_slug = request.path_params.get("company_slug", "").strip()
+    if not company_slug:
+        return JSONResponse({"error": "bad_request", "message": "Missing company_slug in URL."}, status_code=400)
+
+    try:
+        ctx = await _resolve_rules_api_context(request, company_slug)
+    except AuthenticationError as e:
+        return JSONResponse({"error": "unauthorized", "message": sanitize_evidence(str(e))}, status_code=401)
+    except AuthorizationError as e:
+        return JSONResponse({"error": "forbidden", "message": sanitize_evidence(str(e))}, status_code=403)
+
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        return JSONResponse({"error": "bad_request", "message": "Malformed JSON body."}, status_code=400)
+
+    rule_ids = body.get("rule_ids")
+    if not isinstance(rule_ids, list) or not rule_ids:
+        return JSONResponse({"error": "bad_request", "message": "Field 'rule_ids' must be a non-empty list."}, status_code=400)
+
+    if not all(isinstance(r, str) and r.strip() for r in rule_ids):
+        return JSONResponse({"error": "bad_request", "message": "All items in 'rule_ids' must be non-empty strings."}, status_code=400)
+
+    notes = body.get("notes")
+
+    set_current_context(ctx)
+    try:
+        service = _get_service()
+        result = service.delete_canonical_rules_batch(rule_ids=rule_ids, notes=notes)
+        return JSONResponse(result, status_code=200)
+    except AuthorizationError as e:
+        return JSONResponse({"error": "forbidden", "message": sanitize_evidence(str(e))}, status_code=403)
+    except Exception as e:  # noqa: BLE001
+        logger.error("Error in batch deleting rules: %s", sanitize_evidence(str(e)))
+        return JSONResponse({"error": "internal_error", "message": sanitize_evidence(str(e))}, status_code=500)
+    finally:
+        set_current_context(None)
+
+
 @contextlib.asynccontextmanager
 async def app_lifespan(app: Starlette):
-    async with fastmcp_http_app.router.lifespan_context(app):
-        yield
+    try:
+        async with fastmcp_http_app.router.lifespan_context(app):
+            yield
+    except RuntimeError as exc:
+        if "can only be called once per instance" in str(exc):
+            yield
+        else:
+            raise
+
+
+
 
 
 def create_app() -> Starlette:
@@ -1390,6 +1523,16 @@ def create_app() -> Starlette:
                 "/companies/{company_slug}/mcp",
                 CompanyMCPHandler(fastmcp_http_app),
                 methods=["GET", "POST", "HEAD", "OPTIONS"],
+            ),
+            Route(
+                "/companies/{company_slug}/rules/batch-delete",
+                rules_batch_delete_endpoint,
+                methods=["POST"],
+            ),
+            Route(
+                "/companies/{company_slug}/rules/{rule_id}",
+                rule_delete_endpoint,
+                methods=["DELETE"],
             ),
         ],
     )
