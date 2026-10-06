@@ -546,6 +546,10 @@ textarea{min-height:68px;resize:vertical}
       <label>Endpoint</label>
       <input id='svc_endpoint' placeholder='https://community.odooconcept.com'>
     </div>
+    <div id='svc_database_group'>
+      <label>Odoo database</label>
+      <input id='svc_database' autocomplete='off' placeholder='e.g. odooconcept-prod'>
+    </div>
     <div>
       <label>Secrets Manager ARN</label>
       <input id='svc_secret' placeholder='arn:aws:secretsmanager:...'>
@@ -563,7 +567,7 @@ textarea{min-height:68px;resize:vertical}
     <button id='btn_save_service' class='btn-primary'>Save service</button>
     <button id='btn_refresh_services' class='btn-secondary btn-sm'>Refresh</button>
   </div>
-  <p class='help-line'>For Odoo, enter user/password once. The server stores them in AWS Secrets Manager and only keeps the secret reference.</p>
+  <p class='help-line'>For Odoo, enter the database name and user/password. The server stores them in AWS Secrets Manager and only keeps the secret reference.</p>
   <div id='services_list'></div>
 </div>
 </div>
@@ -576,12 +580,15 @@ NKD=document.getElementById('new_key_display'),NKV=document.getElementById('new_
 EK=document.getElementById('existing_keys'),CC=document.getElementById('client_cards'),
 SI=document.getElementById('svc_id'),ST=document.getElementById('svc_transport'),
 SE=document.getElementById('svc_endpoint'),SS=document.getElementById('svc_secret'),
+SD=document.getElementById('svc_database'),SDG=document.getElementById('svc_database_group'),
 SU=document.getElementById('svc_user'),SP=document.getElementById('svc_pass'),
 BS=document.getElementById('btn_save_service'),BR=document.getElementById('btn_refresh_services'),
 SL=document.getElementById('services_list'),
 IU=document.getElementById('invite_email'),IR=document.getElementById('invite_role'),
 IB=document.getElementById('btn_invite_user'),IM=document.getElementById('invite_message');
 let curKey=null;
+function updateServiceFields(){SDG.style.display=ST.value==='odoo_xmlrpc'?'':'none'}
+ST.addEventListener('change',updateServiceFields);updateServiceFields();
 KL.addEventListener('change',()=>{if(CC.childElementCount)renderClients()});
 function safeGet(t,k){try{return window[t].getItem(k)||''}catch(e){return ''}}
 function safeSet(t,k,v){try{window[t].setItem(k,v)}catch(e){console.warn('Storage blocked:',e)}}
@@ -732,10 +739,10 @@ async function loadServices(){
     SL.innerHTML=h
   }catch(e){SL.innerHTML='<p class="help-line">Network error: '+esc(e.message)+'</p>'}
 }
-function editService(id,t,e){SI.value=id;ST.value=t;SE.value=e;SS.value='';SU.value='';SP.value='';SI.focus()}
+function editService(id,t,e){SI.value=id;ST.value=t;SE.value=e;SD.value='';SS.value='';SU.value='';SP.value='';updateServiceFields();SI.focus()}
 BS.onclick=async()=>{
   const b=gb(),c=gc();if(!b){alert('Sign in first.');return}
-  const payload={server_id:SI.value.trim(),transport:ST.value,endpoint:SE.value.trim(),secret_ref:SS.value.trim(),username:SU.value.trim(),password:SP.value};
+  const payload={server_id:SI.value.trim(),transport:ST.value,endpoint:SE.value.trim(),database:SD.value.trim(),secret_ref:SS.value.trim(),username:SU.value.trim(),password:SP.value};
   if(!payload.server_id||!payload.endpoint){alert('Service ID and endpoint are required.');return}
   BS.disabled=true;BS.textContent='Saving...';
   try{const r=await fetch('/admin/downstreams/register?company='+encodeURIComponent(c),{method:'POST',headers:{'Content-Type':'application/json',Authorization:b},body:JSON.stringify(payload)});
