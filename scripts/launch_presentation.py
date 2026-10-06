@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Launcher script for OPM (Odoo Process Memory) Executive Presentation Deck.
 Opens the presentation in your default browser or displays instructions.
