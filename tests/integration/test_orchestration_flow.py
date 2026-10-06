@@ -692,10 +692,13 @@ def test_odoo_xmlrpc_registration_defaults_tools_when_ui_omits_allowlist(multi_t
             secret_ref="arn:aws:secretsmanager:eu-north-1:123:secret:opm/downstream/alpha/odoo",
         )
 
-        assert result.tool_count == 1
+        assert result.tool_count == 2
         server = repo.get_downstream_mcp("co_alpha", "odoo")
         assert server is not None
-        assert [tool.name for tool in server.available_tools] == ["create_record"]
+        assert [tool.name for tool in server.available_tools] == [
+            "search_records",
+            "create_record",
+        ]
 
         # Existing legacy registrations may still contain execute_kw. Hide it
         # from the model-facing catalog without rewriting persisted state.
@@ -712,7 +715,10 @@ def test_odoo_xmlrpc_registration_defaults_tools_when_ui_omits_allowlist(multi_t
         )
         repo.upsert_downstream_mcp(legacy_server)
         visible_tools = service.list_downstream_mcps()[0].available_tools
-        assert [tool.name for tool in visible_tools] == ["create_record"]
+        assert [tool.name for tool in visible_tools] == [
+            "search_records",
+            "create_record",
+        ]
     finally:
         set_current_context(None)
 

@@ -8,6 +8,7 @@ from src.api.auth import AuthContextResolver
 from src.api.auth_context import get_current_context
 from src.extractor.service import ProcessMemoryExtractorService
 from src.governance.memory_retriever import MemoryRetriever
+from src.integrations.odoo_tools import default_odoo_xmlrpc_tools
 from src.models.enums import (
     DecisionType,
     EnforcementMode,
@@ -43,30 +44,16 @@ logger = logging.getLogger(__name__)
 
 
 def _default_odoo_xmlrpc_tools() -> list[DownstreamToolDefinition]:
-    return [
-        DownstreamToolDefinition(
-            name="create_record",
-            description="Create an Odoo record via XML-RPC using explicit model and values arguments.",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "model": {"type": "string"},
-                    "values": {"type": "object"},
-                },
-                "required": ["model", "values"],
-            },
-        ),
-    ]
+    return default_odoo_xmlrpc_tools()
 
 
 def _public_downstream_server(server: DownstreamMCPServer) -> DownstreamMCPServer:
-    """Hide arbitrary method execution from models using the legacy XML-RPC bridge."""
+    """Expose only fixed read and create operations on the XML-RPC bridge."""
     if server.transport != MCPTransport.ODOO_XMLRPC:
         return server
-    visible_tools = [tool for tool in server.available_tools if tool.name != "execute_kw"]
-    if len(visible_tools) == len(server.available_tools):
-        return server
-    return server.model_copy(update={"available_tools": visible_tools})
+    # Apply to existing registrations too, so they receive the safe search tool
+    # without requiring users to re-enter credentials in the setup UI.
+    return server.model_copy(update={"available_tools": default_odoo_xmlrpc_tools()})
 
 
 class HostedProcessMemoryService:
@@ -449,7 +436,9 @@ class HostedProcessMemoryService:
             transport_enum = MCPTransport(transport)
         except ValueError:
             pass
-        if transport_enum == MCPTransport.ODOO_XMLRPC and not parsed_tools:
+        if transport_enum == MCPTransport.ODOO_XMLRPC:
+            # The built-in bridge has a deliberate, fixed allowlist. Never expose
+            # arbitrary registered XML-RPC methods to the orchestration model.
             parsed_tools = _default_odoo_xmlrpc_tools()
 
         server = DownstreamMCPServer(
@@ -579,6 +568,15 @@ class HostedProcessMemoryService:
                     ),
                 )
             registered_servers = filtered
+        elif scope.system == "odoo":
+            # When there is one Odoo connector, make it the implicit target even
+            # if other non-Odoo MCPs are registered for the same company.
+            odoo_servers = [
+                server for server in registered_servers
+                if server.transport == MCPTransport.ODOO_XMLRPC
+            ]
+            if len(odoo_servers) == 1:
+                registered_servers = odoo_servers
 
         if not registered_servers:
             return OrchestrationResult(
@@ -638,6 +636,18 @@ class HostedProcessMemoryService:
                 downstream_hint=downstream_hint,
             )
             if fallback_call:
+                mismatch = self._tool_operation_mismatch(
+                    scope, fallback_call, registered_servers
+                )
+                if mismatch:
+                    return OrchestrationResult(
+                        success=False,
+                        correlation_id=cid,
+                        server_id=fallback_call.server_id,
+                        tool_name=fallback_call.tool_name,
+                        error=mismatch,
+                        metadata={"memory_trace": memory_trace},
+                    )
                 result = self.dispatcher.dispatch(
                     company_id=ctx.company_id,
                     tool_call=fallback_call,
@@ -663,6 +673,23 @@ class HostedProcessMemoryService:
                 metadata={"memory_trace": memory_trace},
             )
 
+        mismatch = self._tool_operation_mismatch(scope, tool_call, registered_servers)
+        if mismatch:
+            return OrchestrationResult(
+                success=False,
+                correlation_id=cid,
+                server_id=tool_call.server_id,
+                tool_name=tool_call.tool_name,
+                error=mismatch,
+                metadata={
+                    "memory_trace": memory_trace,
+                    "tool_call": self._format_tool_call_trace(
+                        tool_call,
+                        include_details=include_trace_details,
+                    ),
+                },
+            )
+
         # 4. Dispatch tool call to downstream adapter with schema and protocol validation
         result = self.dispatcher.dispatch(
             company_id=ctx.company_id,
@@ -678,6 +705,33 @@ class HostedProcessMemoryService:
             ),
         }
         return result
+
+    @staticmethod
+    def _tool_operation_mismatch(
+        scope: ActionContext,
+        tool_call: OrchestrationToolCall,
+        registered_servers: list[DownstreamMCPServer],
+    ) -> str | None:
+        """Keep explicit read scopes from ever reaching an Odoo create call."""
+        server = next(
+            (item for item in registered_servers if item.server_id == tool_call.server_id),
+            None,
+        )
+        if not server or server.transport != MCPTransport.ODOO_XMLRPC:
+            return None
+        operation = (scope.operation or "").strip().lower()
+        if operation in {"search", "search_read", "read", "list", "query", "lookup", "retrieve"}:
+            required_tool = "search_records"
+        elif operation in {"create", "create_record", "add"}:
+            required_tool = "create_record"
+        else:
+            return None
+        if tool_call.tool_name != required_tool:
+            return (
+                f"Action operation '{operation}' requires Odoo tool '{required_tool}'; "
+                f"refusing '{tool_call.tool_name}'. No downstream action was executed."
+            )
+        return None
 
     def _build_actor_context(
         self,

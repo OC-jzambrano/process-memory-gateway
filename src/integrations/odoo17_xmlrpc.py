@@ -8,6 +8,10 @@ from urllib.parse import urlparse
 from src.utils.privacy import sanitize_evidence
 
 logger = logging.getLogger(__name__)
+_ODOO_MODEL_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_.]*$")
+_ODOO_FIELD_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_.]*$")
+_ODOO_ORDER_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_.]*(?:\s+(?:asc|desc))?(?:\s*,\s*[a-zA-Z_][a-zA-Z0-9_.]*(?:\s+(?:asc|desc))?)*$", re.IGNORECASE)
+_ODOO_DOMAIN_OPERATORS = {"=", "!=", ">", ">=", "<", "<=", "like", "ilike", "=like", "=ilike", "in", "not in", "child_of", "parent_of"}
 
 
 class OdooExecutionError(Exception):
@@ -162,6 +166,62 @@ class Odoo17Connector:
         except Exception as e:  # noqa: BLE001 - Catch XML-RPC errors to re-raise sanitized errors
             clean_msg = _sanitize_error_message(str(e))
             raise OdooExecutionError(f"Odoo record creation failed for model '{model}': {clean_msg}") from None
+
+    def search_records(
+        self,
+        model: str,
+        domain: list,
+        fields: list[str],
+        limit: int = 20,
+        order: str = "",
+    ) -> list[dict[str, Any]]:
+        """Read records through the fixed Odoo search_read method only."""
+        if not isinstance(model, str) or not _ODOO_MODEL_RE.fullmatch(model):
+            raise ValueError("Odoo model name is invalid")
+        if not isinstance(domain, list) or len(domain) > 100:
+            raise ValueError("Odoo search domain must be a list with at most 100 terms")
+        for term in domain:
+            if isinstance(term, str):
+                if term not in {"&", "|", "!"}:
+                    raise ValueError("Odoo search domain contains an invalid logical operator")
+                continue
+            if (
+                not isinstance(term, (list, tuple))
+                or len(term) != 3
+                or not isinstance(term[0], str)
+                or not _ODOO_FIELD_RE.fullmatch(term[0])
+                or not isinstance(term[1], str)
+                or term[1] not in _ODOO_DOMAIN_OPERATORS
+            ):
+                raise ValueError("Odoo search domain contains an invalid condition")
+        if (
+            not isinstance(fields, list)
+            or not fields
+            or len(fields) > 50
+            or any(not isinstance(field, str) or not _ODOO_FIELD_RE.fullmatch(field) for field in fields)
+        ):
+            raise ValueError("Odoo search fields must contain 1 to 50 valid field names")
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
+            raise ValueError("Odoo search limit must be a positive integer")
+        limit = min(limit, 100)
+        if order and (not isinstance(order, str) or not _ODOO_ORDER_RE.fullmatch(order)):
+            raise ValueError("Odoo search order is invalid")
+
+        uid = self.authenticate()
+        try:
+            models = self._get_proxy("object")
+            return models.execute_kw(
+                self.db,
+                uid,
+                self.password,
+                model,
+                "search_read",
+                [domain],
+                {"fields": fields, "limit": limit, "order": order or None},
+            )
+        except Exception as e:  # noqa: BLE001 - XML-RPC boundary
+            clean_msg = _sanitize_error_message(str(e))
+            raise OdooExecutionError(f"Odoo record search failed for model '{model}': {clean_msg}") from None
 
     def execute_kw(
         self, model: str, method: str, args: list | None = None, kwargs: dict | None = None

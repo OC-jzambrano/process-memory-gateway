@@ -9,6 +9,7 @@ import anyio
 
 from src.config import AWS_REGION
 from src.integrations.odoo17_xmlrpc import Odoo17Connector, _sanitize_error_message
+from src.integrations.odoo_tools import default_odoo_xmlrpc_tools
 from src.models.enums import MCPTransport
 from src.models.schemas import (
     DownstreamMCPServer,
@@ -213,6 +214,14 @@ class DownstreamDispatcher:
 
         # 2. Tool Allowlist Gate: Check that tool_name exists on this server
         tool_def = next((t for t in server.available_tools if t.name == tool_name), None)
+        if server.transport == MCPTransport.ODOO_XMLRPC and tool_name in {
+            "search_records",
+            "create_record",
+        }:
+            tool_def = next(
+                (t for t in default_odoo_xmlrpc_tools() if t.name == tool_name),
+                tool_def,
+            )
         if not tool_def:
             return OrchestrationResult(
                 success=False,
@@ -222,19 +231,20 @@ class DownstreamDispatcher:
                 error=f"Tool '{tool_name}' is not registered in the allowlist for server '{server_id}'.",
             )
 
-        # Keep the built-in XML-RPC bridge deliberately narrow. Generic MCP
-        # downstreams can expose their own complete tool surface over HTTP;
-        # OPM must not offer arbitrary Odoo model-method execution via execute_kw.
-        if server.transport == MCPTransport.ODOO_XMLRPC and tool_name != "create_record":
+        # Keep the built-in XML-RPC bridge narrow: only fixed search_read and
+        # create operations are supported, never arbitrary model methods.
+        if server.transport == MCPTransport.ODOO_XMLRPC and tool_name not in {
+            "search_records",
+            "create_record",
+        }:
             return OrchestrationResult(
                 success=False,
                 correlation_id=cid,
                 server_id=server_id,
                 tool_name=tool_name,
                 error=(
-                    "The built-in Odoo XML-RPC bridge only supports the registered "
-                    "create_record operation. Use a registered downstream MCP for "
-                    "other Odoo tools."
+                    "The built-in Odoo XML-RPC bridge only supports search_records "
+                    "and create_record. Arbitrary Odoo model methods are not allowed."
                 ),
             )
 
@@ -256,9 +266,18 @@ class DownstreamDispatcher:
             if server.transport == MCPTransport.ODOO_XMLRPC:
                 connector = self._resolve_odoo_connector(server)
                 model = arguments.get("model", "")
-                result = connector.create_record(
-                    model=model, values=arguments.get("values", {})
-                )
+                if tool_name == "search_records":
+                    result = connector.search_records(
+                        model=model,
+                        domain=arguments.get("domain", []),
+                        fields=arguments.get("fields", []),
+                        limit=arguments.get("limit", 20),
+                        order=arguments.get("order", ""),
+                    )
+                else:
+                    result = connector.create_record(
+                        model=model, values=arguments.get("values", {})
+                    )
             elif server.transport == MCPTransport.STREAMABLE_HTTP:
                 result = self._dispatch_streamable_http(server, tool_name, arguments)
             elif server.transport == MCPTransport.INTERNAL_MOCK:

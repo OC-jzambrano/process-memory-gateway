@@ -1,5 +1,7 @@
 import pytest
 
+from src.api.service import HostedProcessMemoryService, _public_downstream_server
+from src.integrations.odoo17_xmlrpc import Odoo17Connector
 from src.models.enums import CompanyStatus, ConstraintKind, MCPTransport, RuleType
 from src.models.schemas import (
     ActionContext,
@@ -464,6 +466,135 @@ def test_odoo_xmlrpc_dispatch_uses_generic_values_payload(tmp_path):
     assert calls == {"model": "res.partner", "values": {"name": "Acme"}}
 
 
+def test_odoo_search_records_dispatches_only_search_read(tmp_path):
+    repo = MemoryRepository(db_path=tmp_path / "dispatcher_odoo_search.db")
+    repo.upsert_company(Company(company_id="co_odoo", company_slug="co-odoo", name="Odoo Co"))
+    repo.upsert_downstream_mcp(
+        DownstreamMCPServer(
+            company_id="co_odoo",
+            server_id="odooconcept_demo",
+            endpoint="https://odoo.example",
+            transport=MCPTransport.ODOO_XMLRPC,
+            available_tools=[DownstreamToolDefinition(name="create_record")],
+        )
+    )
+    calls = {}
+
+    class FakeOdooConnector:
+        def search_records(self, **kwargs):
+            calls.update(kwargs)
+            return [{"id": 12, "name": "Bug"}]
+
+    dispatcher = DownstreamDispatcher(
+        repo=repo, odoo_connector_factory=lambda server: FakeOdooConnector()
+    )
+    result = dispatcher.dispatch(
+        "co_odoo",
+        OrchestrationToolCall(
+            server_id="odooconcept_demo",
+            tool_name="search_records",
+            arguments={
+                "model": "project.tags",
+                "domain": [["name", "ilike", "backend"]],
+                "fields": ["id", "name"],
+                "limit": 25,
+            },
+        ),
+    )
+
+    assert result.success is True
+    assert result.result == [{"id": 12, "name": "Bug"}]
+    assert calls == {
+        "model": "project.tags",
+        "domain": [["name", "ilike", "backend"]],
+        "fields": ["id", "name"],
+        "limit": 25,
+        "order": "",
+    }
+
+
+def test_odoo_xmlrpc_search_records_uses_fixed_search_read_method():
+    connector = object.__new__(Odoo17Connector)
+    connector.db = "odoo_db"
+    connector.password = "secret"
+    connector.authenticate = lambda: 42
+    calls = {}
+
+    class FakeModels:
+        def execute_kw(self, *args):
+            calls["args"] = args
+            return [{"id": 1, "name": "Backend"}]
+
+    connector._get_proxy = lambda service: FakeModels()
+    result = connector.search_records(
+        model="project.tags",
+        domain=[["name", "ilike", "backend"]],
+        fields=["id", "name"],
+        limit=500,
+        order="name asc",
+    )
+
+    assert result == [{"id": 1, "name": "Backend"}]
+    assert calls["args"] == (
+        "odoo_db",
+        42,
+        "secret",
+        "project.tags",
+        "search_read",
+        [[["name", "ilike", "backend"]]],
+        {"fields": ["id", "name"], "limit": 100, "order": "name asc"},
+    )
+
+
+def test_odoo_search_rejects_invalid_domain_before_rpc():
+    connector = object.__new__(Odoo17Connector)
+    connector.authenticate = lambda: pytest.fail("invalid input must be rejected first")
+    with pytest.raises(ValueError, match="invalid condition"):
+        connector.search_records(
+            model="project.tags",
+            domain=[["name", "unlink", []]],
+            fields=["id", "name"],
+        )
+
+
+def test_legacy_odoo_registration_exposes_fixed_search_and_create_tools():
+    server = DownstreamMCPServer(
+        company_id="co_odoo",
+        server_id="odooconcept_demo",
+        endpoint="https://odoo.example",
+        transport=MCPTransport.ODOO_XMLRPC,
+        available_tools=[
+            DownstreamToolDefinition(name="create_record"),
+            DownstreamToolDefinition(name="execute_kw"),
+        ],
+    )
+    exposed = _public_downstream_server(server)
+    assert [tool.name for tool in exposed.available_tools] == [
+        "search_records",
+        "create_record",
+    ]
+
+
+def test_odoo_read_operation_rejects_create_tool_call():
+    server = DownstreamMCPServer(
+        company_id="co_odoo",
+        server_id="odooconcept_demo",
+        endpoint="https://odoo.example",
+        transport=MCPTransport.ODOO_XMLRPC,
+        available_tools=[],
+    )
+    mismatch = HostedProcessMemoryService._tool_operation_mismatch(
+        ActionContext(system="odoo", operation="search"),
+        OrchestrationToolCall(
+            server_id="odooconcept_demo",
+            tool_name="create_record",
+            arguments={"model": "project.tags", "values": {}},
+        ),
+        [server],
+    )
+    assert mismatch and "No downstream action was executed" in mismatch
+
+
 def test_odoo_xmlrpc_dispatch_blocks_arbitrary_execute_kw_even_if_registered(tmp_path):
     repo = MemoryRepository(db_path=tmp_path / "dispatcher_odoo_execute_kw_blocked.db")
     repo.upsert_company(Company(company_id="co_odoo", company_slug="co-odoo", name="Odoo Co"))
@@ -504,7 +635,7 @@ def test_odoo_xmlrpc_dispatch_blocks_arbitrary_execute_kw_even_if_registered(tmp
     )
 
     assert result.success is False
-    assert "only supports the registered create_record operation" in result.error
+    assert "only supports search_records and create_record" in result.error
     assert connector_calls == []
 
 
